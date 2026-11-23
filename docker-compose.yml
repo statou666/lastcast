@@ -1,0 +1,29 @@
+services:
+  lastcast:
+    container_name: lastcast
+    image: lastcast:latest
+    build:
+      context: .
+      args:
+        MEDIA_TOOLS: "1"
+    ports:
+      - "8563:8563"
+    volumes:
+      - lastcast-data:/data
+    environment:
+      - FETCH_INTERVAL_MIN=45
+      # TTS（文字条目朗读成 mp3，用于有声书打包）——留空则不启用
+      - TTS_PROVIDER=openai
+      # 改成你的 TTS 服务地址（OpenAI 兼容 /audio/speech）
+      - TTS_BASE_URL=http://host.docker.internal:5050/v1
+      - TTS_KEY=
+      - TTS_MODEL=tts-1
+      - TTS_VOICE=zh-CN-XiaoxiaoNeural
+      - TTS_SPEED=1
+      # 分段上限：越小越能边生成边播（<200 会被规范化为 2000）
+      - TTS_MAX_CHARS=1500
+    mem_limit: 128m
+    restart: unless-stopped
+
+volumes:
+  lastcast-data:

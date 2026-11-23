@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" version="2.0">
+  <channel>
+    <title>Sample Cast</title>
+    <description>A test feed with enclosures</description>
+    <image><url>https://example.com/cover.jpg</url></image>
+    <item>
+      <title>Episode One</title>
+      <guid>ep-1</guid>
+      <pubDate>Mon, 16 Nov 2026 08:00:00 +0800</pubDate>
+      <itunes:duration>1200</itunes:duration>
+      <enclosure url="http://127.0.0.1:8099/e1.mp3" length="10000" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Episode Two</title>
+      <guid>ep-2</guid>
+      <pubDate>Sun, 15 Nov 2026 08:00:00 +0800</pubDate>
+      <itunes:duration>01:30:00</itunes:duration>
+      <description>desc two</description>
+      <link>http://example.com/ep2</link>
+      <enclosure url="http://127.0.0.1:8099/e2.mp3" type="audio/mpeg"/>
+    </item>
+  </channel>
+  <entry xmlns="http://www.w3.org/2005/Atom">
+    <title>Atom Entry</title>
+    <id>atom-1</id>
+    <link rel="enclosure" href="http://127.0.0.1:8099/atom.mp3" type="audio/mpeg"/>
+    <updated>2026-11-14T09:00:00+08:00</updated>
+  </entry>
+</rss>

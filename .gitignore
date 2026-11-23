@@ -1,0 +1,18 @@
+# build artifacts
+pmbin
+pmbin.exe
+pmbin_*
+*.zip
+
+# runtime data
+data/
+testdata/
+backup-*/
+*.db
+*.db-wal
+*.db-shm
+*.part
+
+# local
+.DS_Store
+*.log

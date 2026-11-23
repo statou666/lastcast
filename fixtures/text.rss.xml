@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Text Room</title>
+    <link>https://example.org/text</link>
+    <description>A text-only feed: no enclosure, so entries are speakable through TTS.</description>
+    <item>
+      <title>The quiet hour</title>
+      <guid>text-1</guid>
+      <pubDate>Mon, 17 Nov 2025 09:00:00 GMT</pubDate>
+      <content:encoded><![CDATA[Good morning. Today we read one short paragraph, then another.
+Second paragraph, which the app should also hand to the TTS provider.]]></content:encoded>
+    </item>
+    <item>
+      <title>Letters to a listener</title>
+      <guid>text-2</guid>
+      <pubDate>Tue, 18 Nov 2025 09:00:00 GMT</pubDate>
+      <description>Plain description text, no media at all.</description>
+    </item>
+  </channel>
+</rss>

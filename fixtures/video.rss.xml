@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Video Room</title>
+    <link>https://example.org/video</link>
+    <description>Video feed with a separate audio-only rendition listed per entry.</description>
+    <item>
+      <title>Episode with pictures</title>
+      <guid>video-1</guid>
+      <pubDate>Wed, 19 Nov 2025 09:00:00 GMT</pubDate>
+      <media:content url="http://127.0.0.1:8099/e1.mp3" type="audio/mpeg" medium="audio"/>
+      <media:content url="http://127.0.0.1:8099/video.mp4" type="video/mp4" medium="video"/>
+      <itunes:duration xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">12:34</itunes:duration>
+    </item>
+    <item>
+      <title>Video only</title>
+      <guid>video-2</guid>
+      <pubDate>Thu, 20 Nov 2025 09:00:00 GMT</pubDate>
+      <media:content url="http://127.0.0.1:8099/video.mp4" type="video/mp4" medium="video"/>
+    </item>
+  </channel>
+</rss>

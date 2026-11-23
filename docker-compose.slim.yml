@@ -1,0 +1,45 @@
+# Slim Lastcast: the image itself has no ffmpeg / yt-dlp.
+#   docker compose -f docker-compose.slim.yml up -d --build
+#
+# Without media tools the app still streams playback and TTS. Downloads fall back
+# to a raw audio copy and yt-dlp-only sources report an error. To restore the full
+# behaviour, mount external binaries (musl-static builds; glibc-static ffmpeg has
+# DNS problems inside Alpine) or point the *_PATH variables at files in /data:
+#   - /path/to/ffmpeg:/usr/local/bin/ffmpeg:ro
+#   - /path/to/ffprobe:/usr/local/bin/ffprobe:ro
+#   - /path/to/yt-dlp:/usr/local/bin/yt-dlp:ro
+services:
+  lastcast:
+    container_name: lastcast
+    image: lastcast:slim
+    build:
+      context: .
+      args:
+        MEDIA_TOOLS: "0"
+        VERSION: dev
+    ports:
+      - "8563:8563"
+    volumes:
+      - lastcast-data:/data
+      # - /path/to/ffmpeg:/usr/local/bin/ffmpeg:ro
+      # - /path/to/ffprobe:/usr/local/bin/ffprobe:ro
+      # - /path/to/yt-dlp:/usr/local/bin/yt-dlp:ro
+    environment:
+      - FETCH_INTERVAL_MIN=45
+      # TTS（文字条目朗读成 mp3，用于有声书打包）——留空则不启用
+      - TTS_PROVIDER=openai
+      # 改成你的 TTS 服务地址（OpenAI 兼容 /audio/speech）
+      - TTS_BASE_URL=http://host.docker.internal:5050/v1
+      - TTS_KEY=
+      - TTS_MODEL=tts-1
+      - TTS_VOICE=zh-CN-XiaoxiaoNeural
+      - TTS_SPEED=1
+      - TTS_MAX_CHARS=1500
+      # - FFMPEG_PATH=/data/bin/ffmpeg
+      # - FFPROBE_PATH=/data/bin/ffprobe
+      # - YTDLP_PATH=/data/bin/yt-dlp
+    mem_limit: 128m
+    restart: unless-stopped
+
+volumes:
+  lastcast-data:

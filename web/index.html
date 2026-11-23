@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0a12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Lastcast">
+<title>Lastcast</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/style.css?v=10">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="#/updates">
+      <img class="logo" src="/icons/icon-192.png" alt="Lastcast">
+      <span>LAST<b>CAST</b></span>
+    </a>
+    <nav class="nav">
+      <a class="navlink active" href="#/updates" data-view="updates">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="6" cy="18" r="2.1"/><path d="M4 4.5A15.5 15.5 0 0 1 19.5 20M4 10.5A9.5 9.5 0 0 1 13.5 20"/></svg></span>
+        <span data-i18n="nav_updates"></span>
+      </a>
+      <a class="navlink" href="#/feeds" data-view="feeds">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3.2 3.5 8 12 12.8 20.5 8 12 3.2Z"/><path d="m3.5 12.6 8.5 4.8 8.5-4.8"/><path d="m3.5 17.2 8.5 4.8 8.5-4.8"/></svg></span>
+        <span data-i18n="nav_feeds"></span>
+      </a>
+      <a class="navlink" href="#/playlist" data-view="playlist">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6.5h11M4 12h11M4 17.5h7"/><path d="M18.5 14.5V6.8l3-1"/><circle cx="17" cy="17" r="2.6"/></svg></span>
+        <span data-i18n="nav_playlist"></span>
+      </a>
+      <a class="navlink" href="#/favorites" data-view="favorites">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3.8 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.9l5.8-.8L12 3.8Z"/></svg></span>
+        <span data-i18n="nav_favorites"></span>
+      </a>
+      <a class="navlink" href="#/downloads" data-view="downloads">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11m0 0 4-4m-4 4-4-4M4.5 19.5h15"/></svg></span>
+        <span data-i18n="nav_downloads"></span>
+      </a>
+      <a class="navlink" href="#/settings" data-view="settings">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7.5h9M18.5 7.5H20M4 16.5h5M13.5 16.5H20"/><circle cx="15.7" cy="7.5" r="2.2"/><circle cx="11" cy="16.5" r="2.2"/></svg></span>
+        <span data-i18n="nav_settings"></span>
+      </a>
+    </nav>
+    <div class="lang">
+      <button data-lang="en">EN</button><button data-lang="zh">中文</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="mhead">
+      <img class="logo" src="/icons/icon-192.png" alt="Lastcast">
+      <span class="name">LAST<b>CAST</b></span>
+      <div class="lang"><button data-lang="en">EN</button><button data-lang="zh">中文</button></div>
+    </div>
+
+    <section class="view" id="view-updates">
+      <div class="chips" id="chips">
+        <button class="chip active" data-filter="all" data-i18n="chip_all"></button>
+        <button class="chip" data-filter="inprogress" data-i18n="chip_listening"></button>
+        <button class="chip" data-filter="new" data-i18n="chip_new"></button>
+        <button class="chip" data-filter="done" data-i18n="chip_done"></button>
+        <button class="chip" data-filter="downloaded" data-i18n="chip_downloaded"></button>
+      </div>
+      <div class="row">
+        <label data-i18n="filter"></label>
+        <select id="filter-feed"></select>
+        <button id="sel-updates" class="ghost" data-i18n="select" style="margin-left:auto"></button>
+      </div>
+      <section class="queue" id="queuebox" hidden>
+        <div class="qhead"><span data-i18n="queue_title"></span><button id="qclear" data-i18n="queue_clear"></button></div>
+        <ul id="queue"></ul>
+      </section>
+      <ul id="episodes" class="list"></ul>
+    </section>
+
+    <section class="view" id="view-feeds" hidden>
+      <form id="addfeed" class="card">
+        <h3 data-i18n="subscribe_one"></h3>
+        <input id="feedurl" placeholder="https://feeds.example.com/show.rss">
+        <select id="feedkind">
+          <option value="auto" data-i18n="kind_auto"></option>
+          <option value="audio" data-i18n="kind_audio"></option>
+          <option value="video" data-i18n="kind_video"></option>
+          <option value="text" data-i18n="kind_text"></option>
+        </select>
+        <input id="feedcat" placeholder="分类 / category（可选）">
+        <button type="submit" class="primary" data-i18n="add"></button>
+        <div class="mut" data-i18n="kind_hint"></div>
+        <div class="mut" id="add-msg"></div>
+      </form>
+      <div class="feedhead">
+        <h3 data-i18n="nav_feeds"></h3>
+        <div class="modes" id="feedmode">
+          <button data-mode="grid" data-i18n="view_grid"></button>
+          <button data-mode="list" data-i18n="view_list"></button>
+          <button id="sel-feeds" data-i18n="select"></button>
+        </div>
+      </div>
+      <div id="feedcards" class="grid"></div>
+      <section class="card">
+        <h3 data-i18n="opml"></h3>
+        <a id="opml-export" href="/api/opml" data-i18n="export" class="btn"></a>
+        <textarea id="opml-in" rows="6" placeholder="&lt;opml&gt;…&lt;/opml&gt;" style="margin-top:10px"></textarea>
+        <button id="opml-import" data-i18n="import" style="margin-top:10px"></button>
+        <div class="mut" id="opml-msg"></div>
+      </section>
+    </section>
+
+    <section class="view" id="view-playlist" hidden>
+      <div class="feedhead">
+        <h3 data-i18n="playlist_title"></h3>
+        <div class="modes">
+          <button id="pl-playall" class="primary" data-i18n="playlist_playall"></button>
+          <button id="pl-shuffle" data-i18n="playlist_shuffle"></button>
+          <button id="pl-clear" data-i18n="playlist_clear"></button>
+          <button id="sel-playlist" data-i18n="select"></button>
+        </div>
+      </div>
+      <ul id="playlist" class="list"></ul>
+    </section>
+
+    <section class="view" id="view-favorites" hidden>
+      <div class="feedhead"><h3 data-i18n="fav_title"></h3><button id="sel-fav" data-i18n="select"></button></div>
+      <ul id="favorites" class="list"></ul>
+    </section>
+
+    <section class="view" id="view-downloads" hidden>
+      <div class="feedhead">
+        <h3 data-i18n="downloads_title"></h3>
+        <button id="sel-dl" data-i18n="select"></button>
+        <button id="dl-retag" data-i18n="dl_retag"></button>
+      </div>
+      <div class="mut" id="dl-msg"></div>
+      <ul id="downloads" class="list"></ul>
+    </section>
+
+    <section class="view" id="view-settings" hidden>
+      <h1 data-i18n="nav_settings"></h1>
+      <section class="card">
+        <h3 data-i18n="card_account"></h3>
+        <div class="row" style="margin-bottom:0">
+          <span class="mut" data-i18n="account_name"></span>
+          <strong id="acct-name">—</strong>
+          <span class="badge" id="acct-role"></span>
+          <button id="logout" data-i18n="logout" style="margin-left:auto"></button>
+        </div>
+        <div class="kv" style="margin-top:14px"><label data-i18n="old_password"></label><input id="pw-old" type="password" autocomplete="current-password"></div>
+        <div class="kv"><label data-i18n="new_password"></label><input id="pw-new" type="password" autocomplete="new-password"></div>
+        <button id="pw-save" data-i18n="change_password"></button>
+        <div class="mut" id="pw-msg"></div>
+      </section>
+      <section class="card">
+        <h3 data-i18n="card_gpodder"></h3>
+        <div class="mut" data-i18n="gpodder_hint" style="margin-bottom:12px"></div>
+        <div class="kv"><label data-i18n="gpodder_server"></label><code id="gp-server">—</code></div>
+        <div class="mut" data-i18n="gpodder_feeds" style="margin:12px 0 6px"></div>
+        <ul id="gp-feeds" class="list"></ul>
+      </section>
+
+      <section class="card">
+        <h3 data-i18n="card_runtime"></h3>
+        <div class="mut" id="admin-note" hidden data-i18n="users_admin_note"></div>
+        <div class="kv"><label data-i18n="fetch_interval"></label><input id="s-fetch" type="number" min="1"></div>
+        <div class="kv"><label data-i18n="concurrency"></label><input id="s-conc" type="number" min="1" max="8"></div>
+        <div class="kv"><label data-i18n="conflict_rule"></label><select id="s-rule"><option>max</option><option>latest</option></select></div>
+        <div class="kv"><label data-i18n="auto_download"></label><input id="s-auto" type="checkbox"></div>
+        <div class="kv"><label data-i18n="storage_limit"></label><input id="s-limit" type="number" min="0"></div>
+        <div class="kv"><label data-i18n="ui_theme"></label><select id="s-theme"><option>dark</option><option>light</option></select></div>
+        <div class="kv"><label data-i18n="play_mode"></label><select id="s-mode"><option value="stream" data-i18n="play_mode_stream"></option><option value="segment" data-i18n="play_mode_segment"></option></select></div>
+        <div class="kv"><label data-i18n="proxy_url"></label><input id="s-proxy" placeholder="http://127.0.0.1:7890"></div>
+        <div class="kv"><label data-i18n="cache_dir"></label><input id="s-cache-dir" placeholder="cache"></div>
+        <div class="kv"><label data-i18n="download_dir"></label><input id="s-dl-dir" placeholder="downloads"></div>
+        <div class="kv"><label data-i18n="cache_limit"></label><input id="s-cache-limit" type="number" min="0"></div>
+        <div class="kv"><label data-i18n="download_format"></label><select id="s-dlformat"><option value="auto" data-i18n="fmt_auto"></option><option value="mp3">MP3</option><option value="m4a">M4A (AAC)</option></select></div>
+        <div class="kv"><label data-i18n="fav_auto_download"></label><input id="s-favauto" type="checkbox"></div>
+        <button id="s-save" class="primary" data-i18n="save"></button>
+        <div class="mut" data-i18n="env_precedence" style="margin-top:10px"></div>
+      </section>
+
+      <section class="card">
+        <h3 data-i18n="card_tts"></h3>
+        <div class="kv"><label data-i18n="tts_provider"></label><select id="tts-provider"><option value="off">off</option><option value="openai">OpenAI-compatible</option></select></div>
+        <div class="kv"><label data-i18n="tts_base"></label><input id="tts-base" placeholder="https://api.openai.com/v1"></div>
+        <div class="kv"><label data-i18n="tts_key"></label><input id="tts-key" type="password"></div>
+        <div class="kv"><label data-i18n="tts_model"></label><input id="tts-model" placeholder="tts-1"></div>
+        <div class="kv"><label data-i18n="tts_voice"></label><select id="tts-voice">
+          <option value="alloy">alloy</option>
+          <option value="zh-CN-XiaoxiaoNeural">zh-CN-XiaoxiaoNeural · 晓晓</option>
+          <option value="zh-CN-XiaoyiNeural">zh-CN-XiaoyiNeural · 晓伊</option>
+          <option value="zh-CN-YunxiNeural">zh-CN-YunxiNeural · 云希</option>
+          <option value="zh-CN-YunjianNeural">zh-CN-YunjianNeural · 云健</option>
+          <option value="zh-CN-YunyangNeural">zh-CN-YunyangNeural · 云扬</option>
+          <option value="zh-CN-YunxiaNeural">zh-CN-YunxiaNeural · 云夏</option>
+          <option value="nova">nova (en-US-AriaNeural)</option>
+          <option value="onyx">onyx (en-US-EricNeural)</option>
+          <option value="sage">sage (en-US-JennyNeural)</option>
+          <option value="shimmer">shimmer (en-US-EmmaNeural)</option>
+          <option value="verse">verse (en-US-BrianNeural)</option>
+        </select></div>
+        <div class="kv"><label data-i18n="tts_speed"></label><input id="tts-speed" type="number" step="0.1" min="0.5" max="2"></div>
+        <div class="kv"><label data-i18n="tts_max"></label><input id="tts-max" type="number" min="200"></div>
+        <div class="kv"><label data-i18n="tts_auto"></label><input id="tts-auto" type="checkbox"></div>
+        <button id="tts-save" class="primary" data-i18n="save"></button>
+        <button id="tts-test" data-i18n="tts_test"></button>
+        <div class="mut" id="tts-msg"></div>
+      </section>
+
+      <section class="card">
+        <h3 data-i18n="cache_title"></h3>
+        <div class="row" style="margin-bottom:0">
+          <button id="cache-clear" data-i18n="cache_clear"></button>
+          <button id="cache-evict" data-i18n="cache_evict"></button>
+        </div>
+        <div class="mut" id="cache-msg"></div>
+      </section>
+
+      <section class="card">
+        <h3 data-i18n="card_sync"></h3>
+        <div class="kv"><label data-i18n="device_name"></label><input id="device_name"></div>
+        <button id="syncnow" data-i18n="sync_now"></button>
+        <table id="devices"></table>
+      </section>
+
+      <section class="card">
+        <h3 data-i18n="card_lang"></h3>
+        <div class="lang langrow">
+          <button data-lang="en">English</button><button data-lang="zh">中文</button>
+        </div>
+      </section>
+
+      <section class="card" id="card-users" hidden>
+        <h3 data-i18n="card_users"></h3>
+        <table id="users"></table>
+        <div class="row" style="margin-top:14px">
+          <input id="u-new-name" placeholder="username" style="max-width:170px">
+          <input id="u-new-pass" type="password" placeholder="password" style="max-width:170px">
+          <select id="u-new-role" style="width:auto"><option value="user" data-i18n="role_user"></option><option value="admin" data-i18n="role_admin"></option></select>
+          <button id="u-add" class="primary" data-i18n="add_user"></button>
+        </div>
+        <div class="mut" id="u-msg"></div>
+      </section>
+
+      <section class="card">
+        <h3 data-i18n="card_env"></h3>
+        <table id="envtable"></table>
+        <table id="stats"></table>
+      </section>
+    </section>
+
+    <section class="view" id="view-detail" hidden>
+      <div id="detail"></div>
+    </section>
+  </main>
+</div>
+
+<div id="selbar" hidden>
+  <span id="selcount">0</span>
+  <div id="selactions"></div>
+  <button data-act="selall" data-i18n="select_all"></button>
+  <button data-act="selnone" data-i18n="select_none"></button>
+  <button data-act="selexit" data-i18n="select_exit"></button>
+</div>
+
+<footer class="player" id="playerbar">
+  <img class="pcover" id="pcover" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src')">
+  <div class="pmain">
+    <div class="ptitle" id="bar-title"></div>
+  </div>
+  <div class="pbar" id="bar-progress"><i id="bar-fill"></i></div>
+  <div class="pctl">
+    <button id="rewind" title="-30s">−30</button>
+    <button id="playpause" data-i18n="play"></button>
+    <button id="forward" title="+30s">+30</button>
+    <select id="speed" title="speed"><option>0.8</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select>
+    <select id="sleep" title="sleep"><option value="0" data-i18n="sleep_off"></option><option value="900">15</option><option value="1800">30</option><option value="2700">45</option><option value="3600">60</option><option value="end" data-i18n="sleep_end"></option></select>
+    <button id="mute" data-i18n="mute"></button>
+    <label class="vol" for="volume"><input id="volume" type="range" min="0" max="100" step="1" value="100"></label>
+    <span class="volnum" id="volnum">100</span>
+  </div>
+  <div class="ptime"><span id="bar-time">00:00</span><span class="mut" id="bar-rem"></span></div>
+  <audio id="audio"></audio>
+</footer>
+<script src="/app.js?v=10"></script>
+</body>
+</html>

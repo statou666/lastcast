@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Long Text Room</title>
+    <link>https://example.com</link>
+    <description>Multi-segment fixture for progressive playback</description>
+    <item>
+      <title>Three paragraph item</title>
+      <guid>seg-1</guid>
+      <pubDate>Sat, 21 Nov 2026 01:00:00 +0000</pubDate>
+      <description>First paragraph of the article, longer than the per-request maximum so the chunker must cut it and it becomes its own TTS request.
+Second paragraph of the article, also longer than the maximum, so it becomes the second TTS request and the second file on disk.
+Third paragraph of the article, again longer than the maximum, so the player can start on segment one before this segment is rendered.</description>
+    </item>
+  </channel>
+</rss>
