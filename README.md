@@ -128,6 +128,33 @@
 | 下载（转码、标签、封面） | ✅ | ⚠️ 无 ffmpeg 时退化为原始音频直接保存 |
 | YouTube 等需要 yt-dlp 的源 | ✅ | ⚠️ 需外部 yt-dlp |
 
+### 预构建镜像（推荐，CI 构建）
+
+仓库用 GitHub Actions 自动构建 **linux/amd64 + linux/arm64** 两种架构，推到两个地方：
+
+| 来源 | 地址 | 说明 |
+|---|---|---|
+| GitHub Container Registry（默认） | `ghcr.io/statou666/lastcast:latest` / `:latest-slim` | 无需额外配置，tag 触发即构建 |
+| Docker Hub（可选） | `docker.io/<你的用户名>/lastcast` | 在仓库 Secrets 里配置后自动同步 |
+
+直接使用：
+
+```bash
+docker pull ghcr.io/statou666/lastcast:latest       # 完整版
+docker pull ghcr.io/statou666/lastcast:latest-slim  # 精简版
+```
+
+镜像 tag 跟着 git tag 走：`v0.1.1` → `0.1.1`、`0.1.1-slim`，同时更新 `latest` / `latest-slim`。
+
+**想发布到 Docker Hub**：
+
+1. 在 Docker Hub 创建 Access Token（Read & Write）；
+2. GitHub 仓库 → Settings → Secrets and variables → Actions，添加 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`；
+3. 推送一个 tag：`git tag v0.1.1 && git push origin v0.1.1`，CI 会同时构建并推送 `ghcr.io/...` 与 `docker.io/<用户>/lastcast`。
+
+> GHCR 的包第一次推送后默认是 private，可在 GitHub → Packages → lastcast → Package settings 里改成 public。
+> 没有 Docker Hub 账号也不影响：GHCR 已经能直接 `docker pull`，且无需额外 secret。
+
 ### 方式一：Docker（完整版，推荐）
 
 ```bash
