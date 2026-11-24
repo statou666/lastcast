@@ -16,7 +16,7 @@ const DICT = {
     add_user: "Add user", role_user: "User", role_admin: "Administrator", users_admin_note: "Only administrators can change instance settings.",
     category: "Category", category_none: "Uncategorized", edit_feed: "Edit", save_feed: "Save",
     feed_url: "Feed URL", feed_auto_download: "Auto-download new episodes of this feed",
-    updated: "Updated", just_now: "just now", ago_min: "{n} min ago", ago_hour: "{n} h ago", ago_day: "{n} d ago",
+    updated: "Updated", published: "Published", load_more: "Load more", just_now: "just now", ago_min: "{n} min ago", ago_hour: "{n} h ago", ago_day: "{n} d ago",
     timeline_today: "Today", timeline_yesterday: "Yesterday", edit_note: "URL changes trigger an immediate refetch.",
     playlist_empty: "Playlist is empty", fav_title: "Favorites", fav_empty: "No favorites yet",
     fav: "Favorite", unfav: "Unfavorite", qnext: "Play next", fav_auto_download: "Auto-download favorited episodes",
@@ -62,7 +62,7 @@ const DICT = {
     add_user: "添加用户", role_user: "普通用户", role_admin: "管理员", users_admin_note: "只有管理员能修改实例设置。",
     category: "分类", category_none: "未分类", edit_feed: "编辑", save_feed: "保存",
     feed_url: "源地址", feed_auto_download: "此源更新时自动下载新集",
-    updated: "更新于", just_now: "刚刚", ago_min: "{n} 分钟前", ago_hour: "{n} 小时前", ago_day: "{n} 天前",
+    updated: "更新于", published: "发布于", load_more: "加载更多", just_now: "刚刚", ago_min: "{n} 分钟前", ago_hour: "{n} 小时前", ago_day: "{n} 天前",
     timeline_today: "今天", timeline_yesterday: "昨天", edit_note: "修改地址后会立即重新抓取。",
     playlist_empty: "播放列表是空的", fav_title: "收藏", fav_empty: "还没有收藏",
     fav: "收藏", unfav: "取消收藏", qnext: "下一首播放", fav_auto_download: "收藏单集自动下载",
@@ -133,7 +133,7 @@ function timeAgo(sec) {
   return new Date(sec * 1000).toLocaleDateString();
 }
 // The entry's "when did this arrive/change in my library" timestamp.
-const tsOf = (e) => e.feed_updated_at || e.added_at || e.published_at || 0;
+const tsOf = (e) => e.published_at || 0;
 function dayLabel(sec) {
   if (!sec) return "";
   const d = new Date(sec * 1000), now = new Date();
@@ -182,8 +182,33 @@ function applyLang() {
   document.querySelectorAll(".lang button").forEach((b) => b.classList.toggle("active", b.dataset.lang === lang));
 }
 
+let pendingSeek = 0;
+
+function saveLastEpisode() {
+  if (!current || !current.id) return;
+  localStorage.setItem("last_episode", JSON.stringify({
+    id: current.id, title: current.title, position: Math.floor(current.position || 0),
+    url: current.file ? "/media/" + current.id : current.enclosure_url,
+    cover: current.cover_url || "", dl: current.dl_file || "",
+  }));
+}
+
+// Report the current position; keepalive survives page close / mobile backgrounding.
+function reportProgress(extra, keepalive) {
+  if (!current || !current.id) return;
+  const pos = Math.floor(audio.currentTime || current.position || 0);
+  current.position = pos;
+  saveLastEpisode();
+  const payload = Object.assign({ episode_id: current.id, device_id: DEVICE, position_sec: pos, segment_idx: segIdx }, extra || {});
+  fetch("/api/progress", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload), keepalive: !!keepalive,
+  }).catch(() => {});
+}
+
 function setBar(ep) {
   current = ep;
+  current._posLoaded = false;
   if (segEp(ep)) { segTotal = ep.segments || segTotal; segIdx = ep.segment_idx || segIdx || 1; }
   barTitle.textContent = ep.title || "";
   pcover.src = ep.cover_url || "";
@@ -206,7 +231,7 @@ function renderBar() {
   const seg = current && segEp(current) && segTotal;
   barFill.style.width = seg ? Math.min(100, (segIdx / segTotal) * 100) + "%" : (dur ? Math.min(100, (pos / dur) * 100) + "%" : "0%");
   barTime.textContent = seg ? `${t("segment")} ${segIdx}/${segTotal} · ${fmtTime(pos)}` : fmtTime(pos);
-  barRem.textContent = dur ? "−" + fmtTime(dur - pos) : "";
+  barRem.textContent = dur ? "−" + fmtTime(Math.max(0, dur - pos)) : "";
 }
 
 // Segment mode applies to text renders and to video audio cuts already in cache.
@@ -243,6 +268,18 @@ async function waitSegment(n) {
 
 async function play() {
   if (!current) return;
+  if (current.id && !current._posLoaded) {
+    try {
+      const fresh = await api("/api/episodes/" + current.id + "?device_id=" + encodeURIComponent(DEVICE));
+      if (fresh && !fresh.error) {
+        current.position = Math.max(current.position || 0, fresh.position || 0);
+        if (fresh.duration_sec) current.duration_sec = fresh.duration_sec;
+        if (fresh.file) current.file = fresh.file;
+        if (fresh.cover_url) current.cover_url = fresh.cover_url;
+      }
+    } catch (e) { /* offline: play from the cached position */ }
+    current._posLoaded = true;
+  }
   if (current.kind === "text" && !current.file && !current.dl_file) {
     const info = await segmentInfo(current.id);
     if (info) segTotal = info.segments || segTotal;
@@ -257,7 +294,7 @@ async function play() {
   const src = source(current);
   if (!src) return;
   const abs = new URL(src, location.origin).href;
-  if (audio.src !== abs) { audio.src = abs; audio.currentTime = current.position || 0; }
+  if (audio.src !== abs) { pendingSeek = current.position || 0; audio.src = abs; }
   audio.playbackRate = parseFloat(document.getElementById("speed").value) || 1;
   audio.play().catch(() => {});
   playBtn.textContent = t("pause");
@@ -289,6 +326,10 @@ function sleepTimer() {
 }
 
 audio.addEventListener("loadedmetadata", () => {
+  if (pendingSeek > 0 && isFinite(audio.duration)) {
+    try { audio.currentTime = pendingSeek; } catch (e) {}
+    pendingSeek = 0;
+  }
   if (!current || !isFinite(audio.duration) || audio.duration <= 0) return;
   if (current.duration_sec) return;
   current.duration_sec = Math.round(audio.duration);
@@ -323,12 +364,17 @@ audio.addEventListener("timeupdate", () => {
   renderBar();
   if (!current) return;
   const pos = Math.floor(audio.currentTime);
+  current.position = pos;
   if (pos - (current._rep || 0) >= 5 || audio.ended) {
     current._rep = pos;
-    if (current.id) api("/api/progress", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ episode_id: current.id, device_id: DEVICE, position_sec: pos, segment_idx: segIdx, completed: audio.ended && (!segEp(current) || segIdx >= segTotal) ? 1 : 0 }) });
+    reportProgress({ completed: audio.ended && (!segEp(current) || segIdx >= segTotal) ? 1 : 0 });
   }
   if (sleepAt && Date.now() >= sleepAt && !audio.paused) { audio.pause(); playBtn.textContent = t("play"); sleepAt = 0; }
 });
+
+audio.addEventListener("pause", () => { if (!audio.ended) reportProgress({}); });
+window.addEventListener("pagehide", () => reportProgress({}, true));
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") reportProgress({}, true); });
 
 audio.addEventListener("ended", async () => {
   if (current && segEp(current) && segTotal && segIdx < segTotal) {
@@ -510,7 +556,7 @@ function rowHtml(e) {
       ${e.cover_url ? `<img class="cover" data-act="openepisode" data-id="${e.id}" src="${esc(e.cover_url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.removeAttribute('src')">` : `<span class="cover ph" data-act="openepisode" data-id="${e.id}">${esc((e.feed_title || e.title || "?").slice(0, 1))}</span>`}
       <div class="t">
         <a class="title" data-act="openepisode" data-id="${e.id}" href="#/episode/${e.id}">${esc(e.title)}</a>
-        <div class="sub">${[esc(e.feed_title || ""), fmtDur(e.duration_sec), tsOf(e) ? `<span class="time">${t("updated")} ${timeAgo(tsOf(e))}</span>` : "", e.kind && e.kind !== "audio" ? `<span class="badge kind">${t("kind_" + e.kind)}</span>` : "", `<span class="badge ${e.status === "downloaded" ? "dl" : e.status === "error" ? "err" : "new"}">${t("status_" + e.status) || e.status}</span>`, e.completed ? `<span class="badge done">${t("chip_done")}</span>` : ""].filter(Boolean).join(" · ")}</div>
+        <div class="sub">${[esc(e.feed_title || ""), fmtDur(e.duration_sec), tsOf(e) ? `<span class="time">${t("published")} ${timeAgo(tsOf(e))}</span>` : "", e.kind && e.kind !== "audio" ? `<span class="badge kind">${t("kind_" + e.kind)}</span>` : "", `<span class="badge ${e.status === "downloaded" ? "dl" : e.status === "error" ? "err" : "new"}">${t("status_" + e.status) || e.status}</span>`, e.completed ? `<span class="badge done">${t("chip_done")}</span>` : ""].filter(Boolean).join(" · ")}</div>
         <div class="bar"><i style="width:${e.duration_sec ? Math.min(100, (e.position / e.duration_sec) * 100) : 0}%"></i></div>
         <div class="notes" data-notes="${e.id}" hidden>${esc(e.description || "")}</div>
       </div>
@@ -524,18 +570,23 @@ function rowHtml(e) {
     </li>`;
 }
 
+let updLimit = 300;
 async function renderUpdates() {
   const feeds = await api("/api/feeds");
   const sel = document.getElementById("filter-feed");
   sel.innerHTML = `<option value="">${t("filter")}: ${t("chip_all")}</option>` + (feeds || []).map((f) => `<option value="${f.id}">${esc(f.title)}</option>`).join("");
   sel.value = filterFeed;
-  const q = new URLSearchParams({ device_id: DEVICE });
+  const q = new URLSearchParams({ device_id: DEVICE, limit: String(updLimit) });
   if (filterFeed) q.set("feed_id", filterFeed);
   const r = await api("/api/sync?" + q);
   lastEps = (r && r.episodes) || [];
+  const more = document.getElementById("ep-more");
+  if (more) more.hidden = !(r && r.has_more);
   await loadQueue();
   renderEpisodes();
 }
+const epMoreBtn = document.getElementById("ep-more");
+if (epMoreBtn) epMoreBtn.addEventListener("click", () => { updLimit += 300; renderUpdates(); });
 
 /* ---------- subscriptions view (poster grid / list, Navidrome-style) ---------- */
 let feedMode = localStorage.getItem("feedmode") || "grid";
@@ -555,7 +606,7 @@ async function renderFeeds() {
     const autoTag = f.auto_download ? ` <span class="badge dl" title="${t("feed_auto_download")}">⤓ auto</span>` : "";
     if (feedMode === "grid") {
       const art = f.cover_url
-        ? `<a class="plink" href="#/feed/${f.id}" data-act="openfeed" data-id="${f.id}"><img class="poster" src="${esc(f.cover_url)}" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src')"></a>`
+        ? `<a class="plink" href="#/feed/${f.id}" data-act="openfeed" data-id="${f.id}"><img class="poster" loading="lazy" src="${esc(f.cover_url)}" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src')"></a>`
         : `<a class="plink" href="#/feed/${f.id}" data-act="openfeed" data-id="${f.id}"><span class="poster ph">${esc(f.title || "?")}</span></a>`;
       return `<div class="pcard" data-id="${f.id}">${pickBox(f.id)}${art}
         <a class="name" data-act="openfeed" data-id="${f.id}" href="#/feed/${f.id}">${esc(f.title || f.url)}</a>
@@ -564,7 +615,7 @@ async function renderFeeds() {
     }
     return `<div class="ep${selectMode ? " has-pick" : ""}" data-id="${f.id}">
       ${pickBox(f.id)}
-      ${f.cover_url ? `<img class="cover" data-act="openfeed" data-id="${f.id}" src="${esc(f.cover_url)}" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src')">` : `<span class="cover ph" data-act="openfeed" data-id="${f.id}">${esc((f.title || "?").slice(0, 1))}</span>`}
+      ${f.cover_url ? `<img class="cover" loading="lazy" data-act="openfeed" data-id="${f.id}" src="${esc(f.cover_url)}" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src')">` : `<span class="cover ph" data-act="openfeed" data-id="${f.id}">${esc((f.title || "?").slice(0, 1))}</span>`}
       <div class="t"><div class="title" data-act="openfeed" data-id="${f.id}">${esc(f.title || f.url)}</div><div class="sub">${esc(f.url)}</div></div>
       ${actions(f)}</div>`;
   };
@@ -602,7 +653,9 @@ async function renderPlaylist() {
   renderSelBar();
   box.innerHTML = queue.map((ep, i) => `<li class="ep${selectMode ? " has-pick" : ""}" data-id="${ep.id}">
       ${pickBox(ep.queue_id)}
-      <span class="cover ph qnum">${i + 1}</span>
+      <span class="coverwrap">${ep.cover_url
+        ? `<img class="cover" loading="lazy" src="${esc(ep.cover_url)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
+        : `<span class="cover ph"></span>`}<span class="qnum">${i + 1}</span></span>
       <div class="t">
         <a class="title" data-act="openepisode" data-id="${ep.id}" href="#/episode/${ep.id}">${esc(ep.title)}</a>
         <div class="sub">${[esc(ep.feed_title || ""), fmtDur(ep.duration_sec), ep.completed ? t("chip_done") : ""].filter(Boolean).join(" · ")}</div>
@@ -1075,6 +1128,17 @@ const savedEp = JSON.parse(localStorage.getItem("last_episode") || "null");
 if (savedEp) {
   current = { id: savedEp.id, title: savedEp.title, position: savedEp.position, duration_sec: 0, cover_url: savedEp.cover || "", file: null, enclosure_url: savedEp.url, dl_file: savedEp.dl || "" };
   setBar(current);
+  current._posLoaded = false;
+  api("/api/episodes/" + savedEp.id + "?device_id=" + encodeURIComponent(DEVICE)).then((ep) => {
+    if (!ep || ep.error || !current || current.id !== ep.id) return;
+    current.position = ep.position || current.position || 0;
+    current.duration_sec = ep.duration_sec || current.duration_sec || 0;
+    current.file = ep.file || null;
+    if (ep.cover_url) current.cover_url = ep.cover_url;
+    current._posLoaded = true;
+    renderBar();
+    saveLastEpisode();
+  }).catch(() => {});
 }
 document.body.dataset.theme = "dark";
 api("/api/settings").then((s) => { document.body.dataset.theme = s.ui_theme || "dark"; });

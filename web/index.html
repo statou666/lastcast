@@ -11,7 +11,7 @@
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=13">
+<link rel="stylesheet" href="/style.css?v=15">
 </head>
 <body>
 <div class="shell">
@@ -76,6 +76,7 @@
         <ul id="queue"></ul>
       </section>
       <ul id="episodes" class="list"></ul>
+      <div class="loadmore"><button id="ep-more" hidden data-i18n="load_more"></button></div>
     </section>
 
     <section class="view" id="view-feeds" hidden>
@@ -267,7 +268,10 @@
 <footer class="player" id="playerbar">
   <img class="pcover" id="pcover" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src')">
   <div class="pmain">
-    <div class="ptitle" id="bar-title"></div>
+    <div class="ptitlerow">
+      <div class="ptitle" id="bar-title"></div>
+      <div class="ptime"><span id="bar-time">00:00</span><span class="mut" id="bar-rem"></span></div>
+    </div>
   </div>
   <div class="pbar" id="bar-progress"><i id="bar-fill"></i></div>
   <div class="pctl">
@@ -280,9 +284,8 @@
     <label class="vol" for="volume"><input id="volume" type="range" min="0" max="100" step="1" value="100"></label>
     <span class="volnum" id="volnum">100</span>
   </div>
-  <div class="ptime"><span id="bar-time">00:00</span><span class="mut" id="bar-rem"></span></div>
   <audio id="audio"></audio>
 </footer>
-<script src="/app.js?v=13"></script>
+<script src="/app.js?v=15"></script>
 </body>
 </html>

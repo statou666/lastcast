@@ -233,11 +233,12 @@ type EpisodeJSON struct {
 
 func handleListFeeds(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
-	rows, err := store.db.Query(`SELECT id,url,kind,COALESCE(detected,''),title,description,cover_url,last_fetched,
-		(SELECT COUNT(*) FROM episodes e WHERE e.feed_id = f.id),
-		(SELECT COUNT(*) FROM episodes e WHERE e.feed_id = f.id AND e.status = 'downloaded'),
-		COALESCE(category,''), COALESCE(auto_download,0)
-		FROM feeds f WHERE user_id=? ORDER BY title COLLATE NOCASE`, uid)
+	rows, err := store.db.Query(`SELECT f.id,f.url,f.kind,COALESCE(f.detected,''),f.title,f.description,f.cover_url,f.last_fetched,
+		COALESCE(c.n,0), COALESCE(c.d,0), COALESCE(f.category,''), COALESCE(f.auto_download,0)
+		FROM feeds f
+		LEFT JOIN (SELECT feed_id, COUNT(*) AS n, SUM(CASE WHEN status='downloaded' THEN 1 ELSE 0 END) AS d
+		           FROM episodes GROUP BY feed_id) c ON c.feed_id=f.id
+		WHERE f.user_id=? ORDER BY f.title COLLATE NOCASE`, uid)
 	if err != nil {
 		fatal(err)
 	}
@@ -549,42 +550,38 @@ func scheduler(ctx context.Context) {
 
 func handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 	feedID := atoi(r.URL.Query().Get("feed_id"))
+	limit := atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 2000 {
+		limit = 500
+	}
 	uid := userID(r)
-	q := `SELECT e.id,e.feed_id,COALESCE(f.title,''),e.guid,COALESCE(e.title,''),e.kind,COALESCE(e.body,''),COALESCE(e.video_url,''),COALESCE(e.description,''),COALESCE(e.enclosure_url,''),e.published_at,e.duration_sec,e.status,COALESCE(e.file_path,''),COALESCE(e.segments,0),COALESCE(e.segments_done,0),
+	q := `SELECT e.id,e.feed_id,COALESCE(f.title,''),e.guid,COALESCE(e.title,''),e.kind,COALESCE(e.video_url,''),COALESCE(e.description,''),COALESCE(e.enclosure_url,''),e.published_at,e.duration_sec,e.status,COALESCE(e.file_path,''),COALESCE(e.segments,0),COALESCE(e.segments_done,0),
 		EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?), COALESCE(e.added_at,0), COALESCE(e.updated_at,0),
 		COALESCE(NULLIF(e.cover_url,''), COALESCE(NULLIF(f.cover_url,''),''))
 		FROM episodes e JOIN feeds f ON f.id=e.feed_id WHERE f.user_id=?`
 	var rows *sql.Rows
 	var err error
 	if feedID > 0 {
-		rows, err = store.db.Query(q+` AND e.feed_id=? ORDER BY e.published_at DESC`, uid, uid, feedID)
+		rows, err = store.db.Query(q+` AND e.feed_id=? ORDER BY (e.published_at IS NULL OR e.published_at = 0), e.published_at DESC, e.added_at DESC, e.id DESC LIMIT ?`, uid, uid, feedID, limit)
 	} else {
-		rows, err = store.db.Query(q+` ORDER BY e.published_at DESC`, uid, uid)
+		rows, err = store.db.Query(q+` ORDER BY (e.published_at IS NULL OR e.published_at = 0), e.published_at DESC, e.added_at DESC, e.id DESC LIMIT ?`, uid, uid, limit)
 	}
 	if err != nil {
 		fatal(err)
 	}
 	defer rows.Close()
 	var out []EpisodeJSON
-	maxChars := ttsConfig().MaxChars
 	for rows.Next() {
 		var e EpisodeJSON
-		var desc, file, video, body sql.NullString
+		var desc, file, video sql.NullString
 		var fav int
-		if err := rows.Scan(&e.ID, &e.FeedID, &e.FeedTitle, &e.Guid, &e.Title, &e.Kind, &body, &video, &desc, &e.EnclosureURL,
+		if err := rows.Scan(&e.ID, &e.FeedID, &e.FeedTitle, &e.Guid, &e.Title, &e.Kind, &video, &desc, &e.EnclosureURL,
 			&e.PublishedAt, &e.DurationSec, &e.Status, &file, &e.Segments, &e.SegmentsDone, &fav, &e.AddedAt, &e.FeedUpdatedAt, &e.CoverURL); err != nil {
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return
 		}
 		e.Description, e.File, e.VideoURL = desc.String, file.String, video.String
 		e.Favorite = fav == 1
-		e.Body = plainText(body.String)
-		if e.Body == "" && desc.String != "" {
-			e.Body = plainText(desc.String)
-		}
-		if e.Kind == "text" && e.Body != "" {
-			e.Chunks = len(chunks(plainText(chunkSource(body.String, desc.String)), maxChars))
-		}
 		out = append(out, e)
 	}
 	writeJSON(w, out)
@@ -744,15 +741,28 @@ func handleSync(w http.ResponseWriter, r *http.Request) {
 			ON CONFLICT(user_id,id) DO UPDATE SET name=COALESCE(NULLIF(excluded.name,''),name), last_seen=excluded.last_seen`,
 			uid, dev, q.Get("device_name"), q.Get("client_type"), nowUnix())
 	}
-	rows, err := store.db.Query(`SELECT e.id,e.feed_id,COALESCE(f.title,''),e.guid,COALESCE(e.title,''),COALESCE(e.kind,''),COALESCE(e.body,''),COALESCE(e.video_url,''),COALESCE(e.description,''),COALESCE(e.enclosure_url,''),e.published_at,e.duration_sec,e.status,COALESCE(e.file_path,''),COALESCE(e.segments,0),COALESCE(e.segments_done,0),
-		COALESCE(MAX(p.position_sec),0), COALESCE(MAX(p.completed),0), COALESCE(MAX(p.updated_at),0),
-		COALESCE(MAX(CASE WHEN p.device_id=? THEN p.position_sec END),0), COALESCE(MAX(CASE WHEN p.device_id=? THEN p.segment_idx END),0),
+	limit := atoi(q.Get("limit"))
+	if limit <= 0 {
+		limit = 400
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	offset := atoi(q.Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := store.db.Query(`SELECT e.id,e.feed_id,COALESCE(f.title,''),e.guid,COALESCE(e.title,''),COALESCE(e.kind,''),
+		e.published_at,e.duration_sec,e.status,COALESCE(e.file_path,''),COALESCE(e.segments,0),COALESCE(e.segments_done,0),
+		COALESCE(p.position_sec,0),COALESCE(p.completed,0),COALESCE(p.segment_idx,0),
 		COALESCE(NULLIF(e.cover_url,''), COALESCE(NULLIF(f.cover_url,''),'')),
-		EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?), COALESCE(e.added_at,0), COALESCE(e.updated_at,0)
+		EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?),
+		COALESCE(e.added_at,0), COALESCE(e.updated_at,0)
 		FROM episodes e JOIN feeds f ON f.id=e.feed_id
-		LEFT JOIN progress p ON p.episode_id=e.id AND p.user_id=?
+		LEFT JOIN progress p ON p.episode_id=e.id AND p.user_id=? AND p.device_id=?
 		WHERE f.user_id=? AND (? = 0 OR e.feed_id = ?)
-		GROUP BY e.id ORDER BY COALESCE(e.updated_at,0) DESC, e.published_at DESC`, dev, dev, uid, uid, uid, feedFilter, feedFilter)
+		ORDER BY (e.published_at IS NULL OR e.published_at = 0), e.published_at DESC, e.added_at DESC, e.id DESC
+		LIMIT ? OFFSET ?`, uid, uid, dev, uid, feedFilter, feedFilter, limit, offset)
 	if err != nil {
 		fatal(err)
 	}
@@ -760,27 +770,20 @@ func handleSync(w http.ResponseWriter, r *http.Request) {
 	var out []EpisodeJSON
 	for rows.Next() {
 		var e EpisodeJSON
-		var ft, desc, file, cover, kindv, bodyv, vidv sql.NullString
-		var myPos, mySeg int64
-		var fav int
-		if err := rows.Scan(&e.ID, &e.FeedID, &ft, &e.Guid, &e.Title, &kindv, &bodyv, &vidv, &desc, &e.EnclosureURL,
-			&e.PublishedAt, &e.DurationSec, &e.Status, &file, &e.Segments, &e.SegmentsDone, &e.Position, &e.Completed, &e.UpdatedAt, &myPos, &mySeg, &cover, &fav, &e.AddedAt, &e.FeedUpdatedAt); err != nil {
+		var ft, file, cover sql.NullString
+		var kindv string
+		if err := rows.Scan(&e.ID, &e.FeedID, &ft, &e.Guid, &e.Title, &kindv,
+			&e.PublishedAt, &e.DurationSec, &e.Status, &file, &e.Segments, &e.SegmentsDone,
+			&e.Position, &e.Completed, &e.SegmentIdx,
+			&cover, &e.Favorite, &e.AddedAt, &e.FeedUpdatedAt); err != nil {
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return
 		}
-		e.FeedTitle, e.Description, e.File, e.CoverURL = ft.String, desc.String, file.String, cover.String
-		e.Favorite = fav == 1
-		e.Kind, e.Body, e.VideoURL = kindv.String, bodyv.String, vidv.String
-		if e.Body == "" && desc.String != "" {
-			e.Body = plainText(desc.String)
-		}
-		if e.Kind == "text" {
-			e.Chunks = len(chunks(plainText(e.Body), ttsConfig().MaxChars))
-		}
-		e.Position = myPos // this device's own view; server keeps global max
+		e.FeedTitle, e.File, e.CoverURL = ft.String, file.String, cover.String
+		e.Kind = kindv
 		out = append(out, e)
 	}
-	writeJSON(w, map[string]any{"device_id": dev, "episodes": out})
+	writeJSON(w, map[string]any{"device_id": dev, "episodes": out, "limit": limit, "offset": offset, "has_more": len(out) == limit})
 }
 
 func bookDoc(feedID, uid int64) map[string]any {

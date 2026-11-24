@@ -87,7 +87,15 @@ CREATE TABLE IF NOT EXISTS favorites(
   episode_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY(user_id, episode_id)
-);`
+);
+CREATE INDEX IF NOT EXISTS idx_episodes_feed ON episodes(feed_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_feed_pub ON episodes(feed_id, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_episodes_updated ON episodes(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_progress_user_ep_dev ON progress(user_id, episode_id, device_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_user_ep ON favorites(user_id, episode_id);
+CREATE INDEX IF NOT EXISTS idx_queue_user_dev ON queue(user_id, device_id, position);
+CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id);
+CREATE INDEX IF NOT EXISTS idx_feeds_user ON feeds(user_id);`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
