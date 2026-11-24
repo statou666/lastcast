@@ -149,12 +149,12 @@ func main() {
 		fatal(err)
 	}
 	ensureTokens()
-	// The SPA root is served explicitly: relying on FileServer's index.html
-	// lookup made it possible to fall back to a directory listing (e.g. when the
-	// file could not be opened), which leaves users on a bare file list after login.
+	// The SPA root is served explicitly and every static file falls back to the
+	// embedded copy, so an unreadable host web directory can never leave users on
+	// a bare directory listing.
 	mux.HandleFunc("GET /{$}", handleIndex)
 	mux.HandleFunc("GET /index.html", handleIndex)
-	mux.Handle("/", http.FileServer(http.Dir(cfg.WebDir)))
+	mux.Handle("/", http.FileServer(http.FS(diskThenEmbed{dir: cfg.WebDir})))
 
 	fatal(http.ListenAndServe(":"+cfg.Port, withAuth(mux)))
 }
@@ -172,23 +172,6 @@ func atoi(s string) int {
 }
 
 func nowUnix() int64 { return time.Now().Unix() }
-
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(cfg.WebDir, "index.html")
-	f, err := os.Open(path)
-	if err != nil {
-		http.Error(w, "web UI missing: "+path, http.StatusInternalServerError)
-		return
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		http.Error(w, "web UI unreadable", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "index.html", st.ModTime(), f)
-}
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
