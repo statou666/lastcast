@@ -572,13 +572,12 @@ function rowHtml(e) {
 
 let updLimit = 300;
 async function renderUpdates() {
-  const feeds = await api("/api/feeds");
+  const q = new URLSearchParams({ device_id: DEVICE, limit: String(updLimit) });
+  if (filterFeed) q.set("feed_id", filterFeed);
+  const [feeds, r] = await Promise.all([api("/api/feeds"), api("/api/sync?" + q)]);
   const sel = document.getElementById("filter-feed");
   sel.innerHTML = `<option value="">${t("filter")}: ${t("chip_all")}</option>` + (feeds || []).map((f) => `<option value="${f.id}">${esc(f.title)}</option>`).join("");
   sel.value = filterFeed;
-  const q = new URLSearchParams({ device_id: DEVICE, limit: String(updLimit) });
-  if (filterFeed) q.set("feed_id", filterFeed);
-  const r = await api("/api/sync?" + q);
   lastEps = (r && r.episodes) || [];
   const more = document.getElementById("ep-more");
   if (more) more.hidden = !(r && r.has_more);
