@@ -179,12 +179,15 @@ func (c ttsCfg) speak(ctx context.Context, text string) ([]byte, error) {
 // player and the audiobook packer use).
 func (d *Downloader) synthesize(ctx context.Context, id int64) error {
 	cfg := ttsConfig()
-	var feedTitle, guid, title, body, desc string
-	if err := store.db.QueryRow(`SELECT f.title, e.guid, e.title, e.body, COALESCE(e.description,'') FROM episodes e
-		JOIN feeds f ON f.id = e.feed_id WHERE e.id = ?`, id).Scan(&feedTitle, &guid, &title, &body, &desc); err != nil {
+	var feedTitle, guid, title, body, desc, full string
+	if err := store.db.QueryRow(`SELECT f.title, e.guid, e.title, COALESCE(e.full_text,''), e.body, COALESCE(e.description,'') FROM episodes e
+		JOIN feeds f ON f.id = e.feed_id WHERE e.id = ?`, id).Scan(&feedTitle, &guid, &title, &full, &body, &desc); err != nil {
 		return err
 	}
-	text := plainText(body)
+	text := plainText(full)
+	if text == "" {
+		text = plainText(body)
+	}
 	if text == "" {
 		text = plainText(desc)
 	}
@@ -303,10 +306,10 @@ func handleSpeak(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	var kind, file, body, desc, title string
+	var kind, file, body, desc, title, full string
 	if err := store.db.QueryRow(`SELECT COALESCE(kind,''),COALESCE(file_path,''),COALESCE(body,''),
-		COALESCE(description,''),COALESCE(title,'') FROM episodes WHERE id=?`, id).
-		Scan(&kind, &file, &body, &desc, &title); err != nil {
+		COALESCE(description,''),COALESCE(title,''),COALESCE(full_text,'') FROM episodes WHERE id=?`, id).
+		Scan(&kind, &file, &body, &desc, &title, &full); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -328,7 +331,10 @@ func handleSpeak(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tts is off", http.StatusServiceUnavailable)
 		return
 	}
-	text := plainText(body)
+	text := plainText(full)
+	if text == "" {
+		text = plainText(body)
+	}
 	if text == "" {
 		text = plainText(desc)
 	}

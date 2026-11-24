@@ -10,7 +10,9 @@ const DICT = {
     copy: "Copy", copied: "Copied", import_done: "Imported {n} feed(s)",
     opml_pick: "Choose a local .opml file", opml_hint: "Pick a .opml file from this computer, or paste its content below.",
     opml_empty: "Choose a file or paste OPML content first.",
-    detect_voices: "Detect voices", voices_found: "{n} voices found", voices_failed: "Detection failed — you can type a voice id", select: "Select", select_all: "All", select_none: "None",
+    detect_voices: "Detect voices", voices_found: "{n} voices found", voices_failed: "Detection failed — you can type a voice id",
+    feed_fetch_fulltext: "Fetch full article text by default", get_fulltext: "Fetch full text", fulltext_done: "Full text saved",
+    voices_click: "Detected voices — click to use:", images: "Images", select: "Select", select_all: "All", select_none: "None",
     select_exit: "Done", selected: "selected", confirm_delete_n: "Delete {n} selected item(s)?", kind: "Type",
     password_changed: "Password updated", proxy_url: "HTTP proxy (optional)",
     add_user: "Add user", role_user: "User", role_admin: "Administrator", users_admin_note: "Only administrators can change instance settings.",
@@ -56,7 +58,9 @@ const DICT = {
     copy: "复制", copied: "已复制", import_done: "已导入 {n} 个源",
     opml_pick: "选择本机 .opml 文件", opml_hint: "从电脑里选一个 .opml 文件，或把内容粘贴到下面。",
     opml_empty: "请先选择文件或粘贴 OPML 内容。",
-    detect_voices: "检测音色", voices_found: "检测到 {n} 个音色", voices_failed: "检测失败，可直接填写音色 ID", select: "多选", select_all: "全选", select_none: "取消选择",
+    detect_voices: "检测音色", voices_found: "检测到 {n} 个音色", voices_failed: "检测失败，可直接填写音色 ID",
+    feed_fetch_fulltext: "默认抓取全文", get_fulltext: "获取全文", fulltext_done: "全文已保存",
+    voices_click: "检测到的音色（点击选用）：", images: "图片", select: "多选", select_all: "全选", select_none: "取消选择",
     select_exit: "完成", selected: "已选", confirm_delete_n: "确定删除选中的 {n} 项？", kind: "类型",
     password_changed: "密码已更新", proxy_url: "代理地址（可选）",
     add_user: "添加用户", role_user: "普通用户", role_admin: "管理员", users_admin_note: "只有管理员能修改实例设置。",
@@ -755,6 +759,38 @@ function fillVoices(list) {
   }).join("");
 }
 
+function renderVoiceChips(list) {
+  const box = document.getElementById("tts-voice-list-box");
+  if (!box) return;
+  box.innerHTML = (list || []).map((v) => {
+    const id = typeof v === "string" ? v : (v.id || v.name || "");
+    const name = typeof v === "string" ? "" : (v.name || "");
+    if (!id) return "";
+    return `<button type="button" class="voicechip" data-voice="${esc(id)}">${esc(id)}${name && name !== id ? ` <span class="mut">· ${esc(name)}</span>` : ""}</button>`;
+  }).join("");
+}
+
+let voicesTried = false;
+async function detectVoices(silent) {
+  const msg = document.getElementById("tts-voice-msg");
+  if (msg && !silent) msg.textContent = "…";
+  const r = await api("/api/tts/voices");
+  if (!r || r.error) {
+    if (r && r.voices) { fillVoices(r.voices); renderVoiceChips(r.voices); }
+    if (msg && !silent) msg.textContent = (r && r.error) || t("voices_failed");
+    return;
+  }
+  detectedVoices = r.voices || [];
+  fillVoices(detectedVoices);
+  renderVoiceChips(detectedVoices);
+  if (msg) msg.textContent = (detectedVoices.length ? t("voices_click") + " " : "") + t("voices_found").replace("{n}", detectedVoices.length);
+  const input = document.getElementById("tts-voice");
+  if (input && !input.value && detectedVoices.length) {
+    const first = detectedVoices[0];
+    input.value = typeof first === "string" ? first : (first.id || first.name || "");
+  }
+}
+
 async function renderSettings() {
   const s = await api("/api/settings");
   ADMIN = s.is_admin === "1";
@@ -777,6 +813,11 @@ async function renderSettings() {
   document.getElementById("tts-model").value = s.tts_model || "";
   document.getElementById("tts-voice").value = s.tts_voice || "";
   fillVoices(detectedVoices.length ? detectedVoices : VOICE_DEFAULTS);
+  renderVoiceChips(detectedVoices);
+  if (!voicesTried && ADMIN && (s.tts_provider || "off") !== "off") {
+    voicesTried = true;
+    setTimeout(() => detectVoices(true), 300);
+  }
   document.getElementById("tts-speed").value = s.tts_speed || "1";
   document.getElementById("tts-max").value = s.tts_max_chars || "3000";
   document.getElementById("tts-auto").checked = (s.tts_auto || "1") === "1";
@@ -822,6 +863,7 @@ async function renderFeedDetail(id) {
       <div class="kv"><label>${t("category")}</label><input id="fe-cat" value="${esc(f.category || "")}" placeholder="${esc(t("category_none"))}"></div>
       <div class="kv"><label>${t("kind")}</label><select id="fe-kind"><option value="auto" ${f.setting === "auto" ? "selected" : ""}>${t("kind_auto")}</option><option value="audio" ${f.setting === "audio" ? "selected" : ""}>${t("kind_audio")}</option><option value="video" ${f.setting === "video" ? "selected" : ""}>${t("kind_video")}</option><option value="text" ${f.setting === "text" ? "selected" : ""}>${t("kind_text")}</option></select></div>
       <div class="kv"><label>${t("feed_auto_download")}</label><input id="fe-auto" type="checkbox" ${f.auto_download ? "checked" : ""}></div>
+      <div class="kv"><label>${t("feed_fetch_fulltext")}</label><input id="fe-fulltext" type="checkbox" ${f.fetch_fulltext ? "checked" : ""}></div>
       <button data-act="savefeed" data-id="${f.id}">${t("save_feed")}</button>
       <div class="mut" id="fe-msg">${t("edit_note")}</div>
     </section>
@@ -849,8 +891,10 @@ async function renderEpisodeDetail(id) {
       <button data-act="qnext" data-id="${ep.id}">${t("qnext")}</button>
       <button data-act="done" data-id="${ep.id}">${t("done")}</button>
       ${ep.kind === "text" && ep.status !== "downloaded" ? `<button data-act="tts" data-id="${ep.id}">${t("tts_render")}</button>` : ""}
+      ${(ep.link || /^https?:/i.test(ep.guid || "")) ? `<button data-act="fulltext" data-id="${ep.id}">${t("get_fulltext")}</button>` : ""}
     </div>
-    <div class="article">${esc(strip(ep.body) || strip(ep.description) || "")}</div>`;
+    <div class="article">${esc(strip(ep.body) || strip(ep.description) || "")}</div>
+    ${(ep.images || []).length ? `<h3 class="mut">${t("images")}</h3><div class="imgrid">${ep.images.map((u) => `<a href="${esc(u)}" target="_blank" rel="noreferrer"><img src="${esc(u)}" loading="lazy" referrerpolicy="no-referrer" alt="" onerror="this.parentElement.remove()"></a>`).join("")}</div>` : ""}`;
 }
 
 const byId = (id) => lastEps.find((x) => x.id === id);
@@ -964,6 +1008,7 @@ document.addEventListener("click", async (ev) => {
       category: document.getElementById("fe-cat").value,
       kind: document.getElementById("fe-kind").value,
       auto_download: document.getElementById("fe-auto").checked,
+      fetch_fulltext: document.getElementById("fe-fulltext").checked,
     };
     const r = await api("/api/feeds/" + id, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const msg = document.getElementById("fe-msg");
@@ -995,6 +1040,14 @@ document.addEventListener("click", async (ev) => {
   }
   if (act === "dldel") { await api("/api/downloads/" + id, { method: "DELETE" }); refreshView(); return; }
   if (act === "play") { if (ep) { setBar(ep); play(); } return; }
+  if (act === "fulltext") {
+    flash("…");
+    const r = await api("/api/episodes/" + id + "/fulltext", { method: "POST" });
+    if (r && r.error) { toast(r.error); return; }
+    toast(t("fulltext_done") + " ✓");
+    await renderEpisodeDetail(id);
+    return;
+  }
   if (act === "q") { await api("/api/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ episode_id: id, device_id: DEVICE }) }); await loadQueue(); toast(t("queue") + " ✓"); return; }
   if (act === "qplay") { const qe = queue.find((x) => x.id === id); if (qe) { setBar(qe); play(); } return; }
   if (act === "qdel") { await api("/api/queue/" + id + "?device_id=" + encodeURIComponent(DEVICE), { method: "DELETE" }); await loadQueue(); return; }
@@ -1095,23 +1148,12 @@ document.getElementById("tts-test").addEventListener("click", async () => {
   const r = await api("/api/tts/test", { method: "POST" });
   flash(r.error || (t("tts_test") + " ✓ " + r.bytes + " bytes"));
 });
-document.getElementById("tts-detect").addEventListener("click", async () => {
-  const msg = document.getElementById("tts-voice-msg");
-  if (msg) msg.textContent = "…";
-  const r = await api("/api/tts/voices");
-  if (!r || r.error) {
-    if (r && r.voices) fillVoices(r.voices);
-    if (msg) msg.textContent = (r && r.error) || t("voices_failed");
-    return;
-  }
-  detectedVoices = r.voices || [];
-  fillVoices(detectedVoices);
-  if (msg) msg.textContent = t("voices_found").replace("{n}", detectedVoices.length);
-  const input = document.getElementById("tts-voice");
-  if (input && !input.value && detectedVoices.length) {
-    const first = detectedVoices[0];
-    input.value = typeof first === "string" ? first : (first.id || first.name || "");
-  }
+document.getElementById("tts-detect").addEventListener("click", () => detectVoices(false));
+document.getElementById("tts-voice-list-box").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-voice]");
+  if (!b) return;
+  document.getElementById("tts-voice").value = b.dataset.voice;
+  document.querySelectorAll("#tts-voice-list-box .voicechip").forEach((x) => x.classList.toggle("active", x === b));
 });
 document.getElementById("syncnow").addEventListener("click", async () => {
   localStorage.setItem("device_name", document.getElementById("device_name").value);

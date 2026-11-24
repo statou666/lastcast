@@ -85,6 +85,7 @@ func main() {
 	defer cancel()
 	go dl.Run(ctx)
 	go scheduler(ctx)
+	go fullTextWorkers(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +110,7 @@ func main() {
 	mux.HandleFunc("GET /api/settings", handleSettings)
 	mux.HandleFunc("POST /api/settings", handleSettings)
 	mux.HandleFunc("POST /api/tts", handleTTS)
+	mux.HandleFunc("POST /api/episodes/{id}/fulltext", handleEpisodeFullText)
 	mux.HandleFunc("POST /api/tts/test", handleTTS)
 	mux.HandleFunc("GET /api/config", handleConfig)
 	mux.HandleFunc("GET /api/devices", handleDevices)
@@ -186,55 +188,59 @@ func fatal(err error) {
 }
 
 type FeedJSON struct {
-	ID           int64  `json:"id"`
-	URL          string `json:"url"`
-	Kind         string `json:"kind"`    // what the app will actually use
-	Setting      string `json:"setting"` // what the user chose (auto = follow detection)
-	Detected     string `json:"detected,omitempty"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	CoverURL     string `json:"cover_url"`
-	LastFetched  int64  `json:"last_fetched"`
-	Episodes     int64  `json:"episodes"`
-	Downloaded   int64  `json:"downloaded"`
-	Category     string `json:"category,omitempty"`
-	AutoDownload bool   `json:"auto_download"`
+	ID            int64  `json:"id"`
+	URL           string `json:"url"`
+	Kind          string `json:"kind"`    // what the app will actually use
+	Setting       string `json:"setting"` // what the user chose (auto = follow detection)
+	Detected      string `json:"detected,omitempty"`
+	Title         string `json:"title"`
+	Description   string `json:"description"`
+	CoverURL      string `json:"cover_url"`
+	LastFetched   int64  `json:"last_fetched"`
+	Episodes      int64  `json:"episodes"`
+	Downloaded    int64  `json:"downloaded"`
+	Category      string `json:"category,omitempty"`
+	AutoDownload  bool   `json:"auto_download"`
+	FetchFulltext bool   `json:"fetch_fulltext"`
 }
 
 type EpisodeJSON struct {
-	ID            int64  `json:"id"`
-	QueueID       int64  `json:"queue_id,omitempty"`
-	FeedID        int64  `json:"feed_id"`
-	FeedTitle     string `json:"feed_title,omitempty"`
-	CoverURL      string `json:"cover_url,omitempty"`
-	Guid          string `json:"guid"`
-	Title         string `json:"title"`
-	Kind          string `json:"kind"`
-	Body          string `json:"body,omitempty"`
-	Chunks        int    `json:"chunks,omitempty"`
-	VideoURL      string `json:"video_url,omitempty"`
-	Description   string `json:"description,omitempty"`
-	EnclosureURL  string `json:"enclosure_url"`
-	PublishedAt   int64  `json:"published_at"`
-	DurationSec   int64  `json:"duration_sec"`
-	Status        string `json:"status"`
-	File          string `json:"file,omitempty"`
-	Position      int64  `json:"position"`
-	Completed     bool   `json:"completed"`
-	Segments      int    `json:"segments,omitempty"`
-	SegmentsDone  int    `json:"segments_done,omitempty"`
-	SegmentIdx    int    `json:"segment_idx,omitempty"`
-	UpdatedAt     int64  `json:"updated_at,omitempty"`
-	Favorite      bool   `json:"favorite,omitempty"`
-	Order         int    `json:"order,omitempty"`
-	AddedAt       int64  `json:"added_at,omitempty"`
-	FeedUpdatedAt int64  `json:"feed_updated_at,omitempty"`
+	ID            int64    `json:"id"`
+	QueueID       int64    `json:"queue_id,omitempty"`
+	FeedID        int64    `json:"feed_id"`
+	FeedTitle     string   `json:"feed_title,omitempty"`
+	CoverURL      string   `json:"cover_url,omitempty"`
+	Guid          string   `json:"guid"`
+	Link          string   `json:"link,omitempty"`
+	Title         string   `json:"title"`
+	Kind          string   `json:"kind"`
+	Body          string   `json:"body,omitempty"`
+	Chunks        int      `json:"chunks,omitempty"`
+	VideoURL      string   `json:"video_url,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	EnclosureURL  string   `json:"enclosure_url"`
+	PublishedAt   int64    `json:"published_at"`
+	DurationSec   int64    `json:"duration_sec"`
+	Status        string   `json:"status"`
+	File          string   `json:"file,omitempty"`
+	Position      int64    `json:"position"`
+	Completed     bool     `json:"completed"`
+	Segments      int      `json:"segments,omitempty"`
+	SegmentsDone  int      `json:"segments_done,omitempty"`
+	SegmentIdx    int      `json:"segment_idx,omitempty"`
+	UpdatedAt     int64    `json:"updated_at,omitempty"`
+	Favorite      bool     `json:"favorite,omitempty"`
+	Order         int      `json:"order,omitempty"`
+	AddedAt       int64    `json:"added_at,omitempty"`
+	FeedUpdatedAt int64    `json:"feed_updated_at,omitempty"`
+	FullText      string   `json:"full_text,omitempty"`
+	Images        []string `json:"images,omitempty"`
 }
 
 func handleListFeeds(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
 	rows, err := store.db.Query(`SELECT f.id,f.url,f.kind,COALESCE(f.detected,''),f.title,f.description,f.cover_url,f.last_fetched,
-		COALESCE(c.n,0), COALESCE(c.d,0), COALESCE(f.category,''), COALESCE(f.auto_download,0)
+		COALESCE(c.n,0), COALESCE(c.d,0), COALESCE(f.category,''), COALESCE(f.auto_download,0), COALESCE(f.fetch_fulltext,0)
 		FROM feeds f
 		LEFT JOIN (SELECT feed_id, COUNT(*) AS n, SUM(CASE WHEN status='downloaded' THEN 1 ELSE 0 END) AS d
 		           FROM episodes GROUP BY feed_id) c ON c.feed_id=f.id
@@ -247,8 +253,8 @@ func handleListFeeds(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var f FeedJSON
 		var title, desc, cover, det sql.NullString
-		var auto int
-		if err := rows.Scan(&f.ID, &f.URL, &f.Setting, &det, &title, &desc, &cover, &f.LastFetched, &f.Episodes, &f.Downloaded, &f.Category, &auto); err != nil {
+		var auto, full int
+		if err := rows.Scan(&f.ID, &f.URL, &f.Setting, &det, &title, &desc, &cover, &f.LastFetched, &f.Episodes, &f.Downloaded, &f.Category, &auto, &full); err != nil {
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return
 		}
@@ -259,6 +265,7 @@ func handleListFeeds(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Title, f.Description, f.CoverURL = title.String, desc.String, cover.String
 		f.AutoDownload = auto == 1
+		f.FetchFulltext = full == 1
 		out = append(out, f)
 	}
 	writeJSON(w, out)
@@ -319,18 +326,19 @@ func handleAddFeed(w http.ResponseWriter, r *http.Request) {
 func loadFeedJSON(id, uid int64) (FeedJSON, bool) {
 	var f FeedJSON
 	var det, title, desc, cover sql.NullString
-	var auto int
+	var auto, full int
 	err := store.db.QueryRow(`SELECT id,COALESCE(url,''),kind,COALESCE(detected,''),COALESCE(title,''),COALESCE(description,''),COALESCE(cover_url,''),last_fetched,
 		(SELECT COUNT(*) FROM episodes e WHERE e.feed_id=f.id),
 		(SELECT COUNT(*) FROM episodes e WHERE e.feed_id=f.id AND e.status='downloaded'),
-		COALESCE(category,''), COALESCE(auto_download,0)
+		COALESCE(category,''), COALESCE(auto_download,0), COALESCE(fetch_fulltext,0)
 		FROM feeds f WHERE id=? AND user_id=?`, id, uid).
-		Scan(&f.ID, &f.URL, &f.Setting, &det, &title, &desc, &cover, &f.LastFetched, &f.Episodes, &f.Downloaded, &f.Category, &auto)
+		Scan(&f.ID, &f.URL, &f.Setting, &det, &title, &desc, &cover, &f.LastFetched, &f.Episodes, &f.Downloaded, &f.Category, &auto, &full)
 	if err != nil {
 		return f, false
 	}
 	f.Detected, f.Title, f.Description, f.CoverURL = det.String, title.String, desc.String, cover.String
 	f.AutoDownload = auto == 1
+	f.FetchFulltext = full == 1
 	f.Kind = f.Setting
 	if f.Kind == "auto" && f.Detected != "" {
 		f.Kind = f.Detected
@@ -347,10 +355,11 @@ func handleUpdateFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		URL          *string `json:"url"`
-		Category     *string `json:"category"`
-		Kind         *string `json:"kind"`
-		AutoDownload *bool   `json:"auto_download"`
+		URL           *string `json:"url"`
+		Category      *string `json:"category"`
+		Kind          *string `json:"kind"`
+		AutoDownload  *bool   `json:"auto_download"`
+		FetchFulltext *bool   `json:"fetch_fulltext"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, map[string]any{"error": "invalid json"})
@@ -395,6 +404,25 @@ func handleUpdateFeed(w http.ResponseWriter, r *http.Request) {
 			v = 1
 		}
 		_, _ = store.db.Exec(`UPDATE feeds SET auto_download=? WHERE id=? AND user_id=?`, v, id, uid)
+	}
+	if body.FetchFulltext != nil {
+		v := 0
+		if *body.FetchFulltext {
+			v = 1
+		}
+		_, _ = store.db.Exec(`UPDATE feeds SET fetch_fulltext=? WHERE id=? AND user_id=?`, v, id, uid)
+		if v == 1 {
+			rows, err := store.db.Query(`SELECT id FROM episodes WHERE feed_id=? AND kind='text' AND COALESCE(full_text,'')='' ORDER BY published_at DESC LIMIT 10`, id)
+			if err == nil {
+				for rows.Next() {
+					var eid int64
+					if rows.Scan(&eid) == nil {
+						enqueueFullText(eid)
+					}
+				}
+				rows.Close()
+			}
+		}
 	}
 	note := ""
 	if refetch {
@@ -446,12 +474,13 @@ func shouldAuto(kind string, feedAuto bool) bool {
 
 func fetchAndUpsertFeed(feedID int64, url string) (int, error) {
 	var etag, feedKind string
-	var auto int
-	if err := store.db.QueryRow(`SELECT COALESCE(etag,''), COALESCE(kind,'auto'), COALESCE(auto_download,0) FROM feeds WHERE id=?`, feedID).
-		Scan(&etag, &feedKind, &auto); err != nil {
+	var auto, fetchFull int
+	if err := store.db.QueryRow(`SELECT COALESCE(etag,''), COALESCE(kind,'auto'), COALESCE(auto_download,0), COALESCE(fetch_fulltext,0) FROM feeds WHERE id=?`, feedID).
+		Scan(&etag, &feedKind, &auto, &fetchFull); err != nil {
 		feedKind = "auto"
 	}
 	feedAuto := auto == 1
+	fetchFullText := fetchFull == 1
 	meta, items, newEtag, notMod, err := fetchFeed(hclient, url, etag)
 	if err != nil {
 		return 0, err
@@ -469,24 +498,33 @@ func fetchAndUpsertFeed(feedID int64, url string) (int, error) {
 		etag=?, last_fetched=? WHERE id=?`,
 		meta.Kind, meta.Title, meta.Description, meta.CoverURL, meta.Author, newEtag, nowUnix(), feedID)
 	new := 0
+	ftEnqueued := 0
 	for _, it := range items {
 		kind := it.Kind
 		if setting != "auto" {
 			kind = setting // an explicit choice in the subscribe form wins over detection
 		}
 		now := nowUnix()
-		res, err := store.db.Exec(`INSERT OR IGNORE INTO episodes(feed_id,guid,title,description,body,enclosure_url,enclosure_type,video_url,kind,published_at,duration_sec,author,cover_url,added_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, feedID, it.Guid, it.Title, it.Description, it.Body, it.EnclosureURL, it.EnclosureType, it.VideoURL, kind, it.PublishedAt, it.DurationSec, it.Author, it.CoverURL, now, now)
+		imgs := dedupeImages(extractImages(it.Body+" "+it.Description, it.Link, ""))
+		cover := it.CoverURL
+		if cover == "" && len(imgs) > 0 {
+			cover = imgs[0]
+		}
+		res, err := store.db.Exec(`INSERT OR IGNORE INTO episodes(feed_id,guid,title,description,body,enclosure_url,enclosure_type,video_url,kind,published_at,duration_sec,author,cover_url,link,images,added_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, feedID, it.Guid, it.Title, it.Description, it.Body, it.EnclosureURL, it.EnclosureType, it.VideoURL, kind, it.PublishedAt, it.DurationSec, it.Author, cover, it.Link, encodeImages(imgs), now, now)
 		if err != nil {
 			continue
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			new++
+			id, _ := res.LastInsertId()
 			store.logEvent("episode", it.Guid, "added")
-			if shouldAuto(kind, feedAuto) {
-				if id, err := res.LastInsertId(); err == nil && needsDownload(id) {
-					dl.Enqueue(id)
-				}
+			if shouldAuto(kind, feedAuto) && needsDownload(id) {
+				dl.Enqueue(id)
+			}
+			if fetchFullText && kind == "text" && ftEnqueued < 8 {
+				enqueueFullText(id)
+				ftEnqueued++
 			}
 			continue
 		}
@@ -497,6 +535,8 @@ func fetchAndUpsertFeed(feedID int64, url string) (int, error) {
 			duration_sec=CASE WHEN duration_sec=0 AND ?>0 THEN ? ELSE duration_sec END,
 			author=CASE WHEN COALESCE(author,'')='' THEN ? ELSE author END,
 			cover_url=CASE WHEN COALESCE(cover_url,'')='' THEN ? ELSE cover_url END,
+			link=CASE WHEN COALESCE(link,'')='' THEN ? ELSE link END,
+			images=CASE WHEN COALESCE(images,'')='' THEN ? ELSE images END,
 			updated_at=?
 			WHERE feed_id=? AND guid=? AND (
 				COALESCE(title,'')<>? OR COALESCE(description,'')<>? OR COALESCE(body,'')<>? OR
@@ -505,9 +545,16 @@ func fetchAndUpsertFeed(feedID int64, url string) (int, error) {
 			it.Title, it.Description, it.Body, it.EnclosureURL, it.EnclosureType, it.VideoURL, kind,
 			it.PublishedAt, it.PublishedAt,
 			it.DurationSec, it.DurationSec,
-			it.Author, it.CoverURL, now,
+			it.Author, cover, it.Link, encodeImages(imgs), now,
 			feedID, it.Guid,
 			it.Title, it.Description, it.Body, it.EnclosureURL, it.EnclosureType, it.VideoURL, kind)
+		if fetchFullText && kind == "text" && ftEnqueued < 8 {
+			var id int64
+			if store.db.QueryRow(`SELECT id FROM episodes WHERE feed_id=? AND guid=? AND COALESCE(full_text,'')=''`, feedID, it.Guid).Scan(&id) == nil {
+				enqueueFullText(id)
+				ftEnqueued++
+			}
+		}
 	}
 	return new, nil
 }
@@ -700,18 +747,27 @@ func handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 	var pos, comp, segIdx int64
 	var fav int
 	uid := userID(r)
+	var link, fullText, imagesJSON sql.NullString
 	err := store.db.QueryRow(`SELECT e.id,e.feed_id,f.title,e.guid,e.title,e.kind,e.body,e.video_url,e.description,e.enclosure_url,e.published_at,e.duration_sec,e.status,e.file_path,COALESCE(p.position_sec,0),COALESCE(p.completed,0),COALESCE(p.segment_idx,0),COALESCE(NULLIF(e.cover_url,''), COALESCE(NULLIF(f.cover_url,''),'')),COALESCE(e.segments,0),COALESCE(e.segments_done,0),
-		EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?), COALESCE(e.added_at,0), COALESCE(e.updated_at,0)
+		EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?), COALESCE(e.added_at,0), COALESCE(e.updated_at,0),
+		COALESCE(e.link,''), COALESCE(e.full_text,''), COALESCE(e.images,'')
 		FROM episodes e JOIN feeds f ON f.id=e.feed_id
 		LEFT JOIN progress p ON p.episode_id=e.id AND p.device_id=? AND p.user_id=? WHERE e.id=? AND f.user_id=?`, uid, dev, uid, id, uid).
 		Scan(&e.ID, &e.FeedID, &ft, &e.Guid, &e.Title, &e.Kind, &body, &video, &desc, &e.EnclosureURL,
-			&e.PublishedAt, &e.DurationSec, &e.Status, &file, &pos, &comp, &segIdx, &cover, &e.Segments, &e.SegmentsDone, &fav, &e.AddedAt, &e.FeedUpdatedAt)
+			&e.PublishedAt, &e.DurationSec, &e.Status, &file, &pos, &comp, &segIdx, &cover, &e.Segments, &e.SegmentsDone, &fav, &e.AddedAt, &e.FeedUpdatedAt,
+			&link, &fullText, &imagesJSON)
 	if err != nil {
 		writeJSON(w, map[string]any{"error": "episode not found"})
 		return
 	}
 	e.FeedTitle = plainText(ft.String)
-	e.Body = plainText(body.String)
+	e.Link = link.String
+	e.FullText = fullText.String
+	e.Images = decodeImages(imagesJSON.String)
+	e.Body = plainText(e.FullText)
+	if e.Body == "" {
+		e.Body = plainText(body.String)
+	}
 	if e.Body == "" {
 		e.Body = plainText(desc.String)
 	}
