@@ -398,6 +398,7 @@ type dlMeta struct {
 	Cover       string
 	FeedCover   string
 	Guid        string
+	Description string
 	PublishedAt int64
 	Track       int
 	Total       int
@@ -405,11 +406,15 @@ type dlMeta struct {
 
 func downloadMeta(id int64) (dlMeta, error) {
 	var m dlMeta
+	var full, body, desc string
 	err := store.db.QueryRow(`SELECT e.id, COALESCE(e.title,''), e.feed_id, COALESCE(f.title,''),
 		COALESCE(f.author,''), COALESCE(e.author,''), COALESCE(e.cover_url,''), COALESCE(f.cover_url,''),
-		e.guid, COALESCE(e.published_at,0), COALESCE(f.user_id,0)
+		e.guid, COALESCE(e.published_at,0), COALESCE(f.user_id,0),
+		COALESCE(e.full_text,''), COALESCE(e.body,''), COALESCE(e.description,'')
 		FROM episodes e JOIN feeds f ON f.id=e.feed_id WHERE e.id=?`, id).
-		Scan(&m.ID, &m.Title, &m.FeedID, &m.FeedTitle, &m.FeedAuthor, &m.Author, &m.Cover, &m.FeedCover, &m.Guid, &m.PublishedAt, &m.UserID)
+		Scan(&m.ID, &m.Title, &m.FeedID, &m.FeedTitle, &m.FeedAuthor, &m.Author, &m.Cover, &m.FeedCover, &m.Guid, &m.PublishedAt, &m.UserID,
+			&full, &body, &desc)
+	m.Description = tagDescription(full, body, desc)
 	if err != nil {
 		return m, err
 	}
@@ -598,52 +603,63 @@ func finishDownload(ctx context.Context, id int64, raw string) (string, error) {
 	writeAlbumCover(dir, cover)
 
 	rawCodec := probeAudioCodec(raw)
-	artist := m.Author
-	if artist == "" {
-		artist = m.FeedAuthor
+	// Try progressively: requested format + cover, requested format without cover
+	// (a broken cover image must not cost the metadata), then MP3 + cover as a
+	// portable fallback when the m4a/ipod muxer cannot carry the tags.
+	type attempt struct {
+		target, cover, ext string
 	}
-	if artist == "" {
-		artist = m.FeedTitle
-	}
-	albumArtist := m.FeedAuthor
-	if albumArtist == "" {
-		albumArtist = m.FeedTitle
-	}
-	metaArgs := tagArgs(m, artist, albumArtist)
-	tmp := rawPathFor(id, ext) + ".out.part"
-	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", raw}
-	mapArgs := []string{"-map", "0:a"}
+	attempts := []attempt{{target, cover, "." + target}}
 	if cover != "" {
-		args = append(args, "-i", cover)
-		mapArgs = append(mapArgs, "-map", "1:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic")
+		attempts = append(attempts, attempt{target, "", "." + target})
 	}
-	args = append(args, mapArgs...)
-	args = append(args, audioCodecArgs(target, rawCodec)...)
-	args = append(args, metaArgs...)
-	args = append(args, containerArgs(target)...)
-	args = append(args, tmp)
-
-	ok := false
+	if target == "m4a" {
+		attempts = append(attempts, attempt{"mp3", cover, ".mp3"}, attempt{"mp3", "", ".mp3"})
+	}
+	var finalPath, lastErr string
 	if _, err := exec.LookPath(ffmpegPath()); err == nil {
-		cmd := exec.CommandContext(ctx, ffmpegPath(), args...)
-		if outb, err := cmd.CombinedOutput(); err == nil {
-			if st, e := os.Stat(tmp); e == nil && st.Size() > 0 {
-				ok = true
+		for _, a := range attempts {
+			tmp := rawPathFor(id, a.ext) + ".out.part"
+			_ = os.MkdirAll(filepath.Dir(tmp), 0o755)
+			args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", raw}
+			mapArgs := []string{"-map", "0:a"}
+			if a.cover != "" {
+				args = append(args, "-i", a.cover)
+				mapArgs = append(mapArgs, "-map", "1:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic")
 			}
-		} else {
-			_ = outb
-		}
-	}
-	var finalPath string
-	if ok {
-		if err := os.Rename(tmp, final); err == nil {
-			finalPath = final
+			args = append(args, mapArgs...)
+			args = append(args, audioCodecArgs(a.target, rawCodec)...)
+			args = append(args, tagArgs(m)...)
+			args = append(args, containerArgs(a.target)...)
+			args = append(args, tmp)
+			outb, err := exec.CommandContext(ctx, ffmpegPath(), args...).CombinedOutput()
+			if err != nil {
+				lastErr = strings.TrimSpace(string(outb))
+				_ = os.Remove(tmp)
+				continue
+			}
+			if st, e := os.Stat(tmp); e != nil || st.Size() == 0 {
+				lastErr = "tag output empty"
+				_ = os.Remove(tmp)
+				continue
+			}
+			candidate := uniqueDownloadPath(dir, m.Title, a.ext, own)
+			if err := os.Rename(tmp, candidate); err != nil {
+				lastErr = err.Error()
+				_ = os.Remove(tmp)
+				continue
+			}
+			finalPath = candidate
+			final = candidate
+			break
 		}
 	}
 	if finalPath == "" {
-		// No ffmpeg (or a tag/format failure): fall back to a plain copy so the
-		// download is never lost.
-		_ = os.Remove(tmp)
+		// No ffmpeg (or every tag/format attempt failed): keep the audio, but do
+		// not silently pretend it was tagged.
+		if lastErr != "" {
+			store.logEvent("download", itoa(id), "tag_fallback: "+lastErr)
+		}
 		final = uniqueDownloadPath(dir, m.Title, rawExt, own)
 		if err := os.Rename(raw, final); err == nil {
 			finalPath = final
@@ -655,7 +671,6 @@ func finishDownload(ctx context.Context, id int64, raw string) (string, error) {
 		} else {
 			return "", fmt.Errorf("cannot place download")
 		}
-		_ = os.Remove(raw)
 	} else if raw != finalPath {
 		_ = os.Remove(raw)
 	}
@@ -672,22 +687,56 @@ func finishDownload(ctx context.Context, id int64, raw string) (string, error) {
 	return finalPath, nil
 }
 
+// tagDescription prefers the fetched full article, then the feed body, then the
+// summary. Newlines are flattened and the value is capped so tags stay portable.
+func tagDescription(full, body, desc string) string {
+	text := plainText(full)
+	if text == "" {
+		text = plainText(body)
+	}
+	if text == "" {
+		text = plainText(desc)
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	r := []rune(text)
+	if len(r) > 1500 {
+		r = r[:1500]
+	}
+	return strings.TrimSpace(string(r))
+}
+
 // tagArgs builds the album metadata block shared by downloads and retags.
-func tagArgs(m dlMeta, artist, albumArtist string) []string {
+// 作者/专辑艺术家统一用源名，描述用条目正文，日期用发布日期。
+func tagArgs(m dlMeta) []string {
+	artist := m.FeedTitle
+	if artist == "" {
+		artist = m.FeedAuthor
+	}
+	if artist == "" {
+		artist = m.Author
+	}
 	args := []string{
 		"-map_metadata", "-1",
 		"-metadata", "title=" + m.Title,
 		"-metadata", "album=" + m.FeedTitle,
 		"-metadata", "artist=" + artist,
-		"-metadata", "album_artist=" + albumArtist,
+		"-metadata", "album_artist=" + artist,
 		"-metadata", "genre=Podcast",
 		"-metadata", fmt.Sprintf("track=%d/%d", m.Track, m.Total),
 	}
-	if m.PublishedAt > 0 {
-		args = append(args, "-metadata", "date="+time.Unix(m.PublishedAt, 0).Format("2006-01-02"))
+	if m.Description != "" {
+		args = append(args,
+			"-metadata", "description="+m.Description,
+			"-metadata", "synopsis="+m.Description,
+			"-metadata", "comment="+m.Description)
+	} else if strings.HasPrefix(m.Guid, "http") {
+		args = append(args, "-metadata", "comment="+m.Guid)
 	}
 	if strings.HasPrefix(m.Guid, "http") {
-		args = append(args, "-metadata", "comment="+m.Guid)
+		args = append(args, "-metadata", "url="+m.Guid)
+	}
+	if m.PublishedAt > 0 {
+		args = append(args, "-metadata", "date="+time.Unix(m.PublishedAt, 0).Format("2006-01-02"))
 	}
 	return args
 }
@@ -713,40 +762,64 @@ func retagFile(ctx context.Context, id int64, path string) error {
 		cover = ensureCover(ctx, m.FeedCover)
 	}
 	writeAlbumCover(filepath.Dir(path), cover)
-	artist := m.Author
-	if artist == "" {
-		artist = m.FeedAuthor
+	rawCodec := probeAudioCodec(path)
+	targets := []string{target}
+	if target == "m4a" {
+		targets = append(targets, "mp3") // portable fallback
 	}
-	if artist == "" {
-		artist = m.FeedTitle
+	var okPath string
+	var lastErr string
+	for _, t := range targets {
+		covers := []string{cover}
+		if cover != "" {
+			covers = append(covers, "")
+		}
+		for _, c := range covers {
+			ext := "." + t
+			out := strings.TrimSuffix(path, filepath.Ext(path)) + ext + ".retag"
+			args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", path}
+			mapArgs := []string{"-map", "0:a"}
+			if c != "" {
+				args = append(args, "-i", c)
+				mapArgs = append(mapArgs, "-map", "1:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic")
+			}
+			args = append(args, mapArgs...)
+			args = append(args, audioCodecArgs(t, rawCodec)...)
+			args = append(args, tagArgs(m)...)
+			args = append(args, containerArgs(t)...)
+			args = append(args, out)
+			if outb, err := exec.CommandContext(ctx, ffmpegPath(), args...).CombinedOutput(); err != nil {
+				lastErr = strings.TrimSpace(string(outb))
+				_ = os.Remove(out)
+				continue
+			}
+			if st, e := os.Stat(out); e != nil || st.Size() == 0 {
+				lastErr = "retag produced no file"
+				_ = os.Remove(out)
+				continue
+			}
+			if err := os.Rename(out, path); err == nil {
+				okPath = path
+			} else {
+				okPath = strings.TrimSuffix(path, filepath.Ext(path)) + ext
+				if err := os.Rename(out, okPath); err == nil {
+					_ = os.Remove(path)
+					_, _ = store.db.Exec(`UPDATE episodes SET file_path=? WHERE file_path=?`, okPath, path)
+				} else {
+					okPath = ""
+					lastErr = err.Error()
+				}
+			}
+			if okPath != "" {
+				break
+			}
+		}
+		if okPath != "" {
+			break
+		}
 	}
-	albumArtist := m.FeedAuthor
-	if albumArtist == "" {
-		albumArtist = m.FeedTitle
-	}
-	tmp := rawPathFor(id, ext) + ".retag"
-	_ = os.MkdirAll(filepath.Dir(tmp), 0o755)
-	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", path}
-	mapArgs := []string{"-map", "0:a"}
-	if cover != "" {
-		args = append(args, "-i", cover)
-		mapArgs = append(mapArgs, "-map", "1:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic")
-	}
-	args = append(args, mapArgs...)
-	args = append(args, "-c:a", "copy")
-	args = append(args, tagArgs(m, artist, albumArtist)...)
-	args = append(args, containerArgs(target)...)
-	args = append(args, tmp)
-	if outb, err := exec.CommandContext(ctx, ffmpegPath(), args...).CombinedOutput(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("retag: %v: %s", err, strings.TrimSpace(string(outb)))
-	}
-	if st, err := os.Stat(tmp); err != nil || st.Size() == 0 {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("retag produced no file")
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
+	if okPath == "" {
+		return fmt.Errorf("retag: %s", lastErr)
 	}
 	return registerDownload(id)
 }

@@ -88,7 +88,8 @@
 
 - 下载目录按订阅分文件夹：`下载目录/<订阅标题>/<条目标题>.<扩展名>`。
 - 可选下载格式：自动（跟随源）/ MP3 / M4A；同编码时直接 copy，不重复转码。
-- 每个成品都写成「专辑曲目」：内嵌封面，并写入 `title / album / artist / album_artist / track=N/总数 / date / genre=Podcast / comment=原始链接`；订阅文件夹里还有 `cover.jpg`。
+- 每个成品都写成「专辑曲目」：内嵌封面，并写入 `title / album / artist(源名) / album_artist(源名) / track=N/总数 / date(发布日期) / genre=Podcast / description(条目正文) / synopsis / comment`；订阅文件夹里还有 `cover.jpg`。
+- 标签写入失败时会自动重试（先去掉封面、再把 m4a 退回 mp3），不会因为封面问题丢掉全部元数据。
 - 视频源下载时只保留音轨；长视频会分块下载再本地提取，避免 CDN 长连接假死导致文件截断。
 - 下载独立于订阅：删除订阅**不会**删除已下载文件，可在「下载」页单独管理、批量删除。
 - 打包：一个订阅可导出为 zip（`book.json` + 按顺序命名的音频），方便导入有声书应用。
