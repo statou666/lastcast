@@ -187,6 +187,7 @@ function applyLang() {
 }
 
 let pendingSeek = 0;
+let playToken = 0;
 
 function saveLastEpisode() {
   if (!current || !current.id) return;
@@ -211,6 +212,15 @@ function reportProgress(extra, keepalive) {
 }
 
 function setBar(ep) {
+  playToken++;
+  const prev = current && current.id;
+  if (prev && prev !== ep.id) {
+    // Switching episodes must silence the old one immediately, before any
+    // segment lookup / network wait for the new one.
+    try { audio.pause(); } catch (e) {}
+    try { audio.removeAttribute("src"); audio.load(); } catch (e) {}
+    pendingSeek = 0;
+  }
   current = ep;
   current._posLoaded = false;
   if (segEp(ep)) { segTotal = ep.segments || segTotal; segIdx = ep.segment_idx || segIdx || 1; }
@@ -257,7 +267,9 @@ async function segmentInfo(id) {
 }
 
 async function waitSegment(n) {
+  const waitingFor = current && current.id;
   for (let i = 0; i < 40; i++) {
+    if (!current || current.id !== waitingFor) return false;
     const r = await segmentInfo(current.id);
     if (r) {
       segTotal = r.segments || segTotal;
@@ -272,6 +284,8 @@ async function waitSegment(n) {
 
 async function play() {
   if (!current) return;
+  const token = playToken;
+  try { audio.pause(); } catch (e) {}
   if (current.id && !current._posLoaded) {
     try {
       const fresh = await api("/api/episodes/" + current.id + "?device_id=" + encodeURIComponent(DEVICE));
@@ -283,18 +297,21 @@ async function play() {
       }
     } catch (e) { /* offline: play from the cached position */ }
     current._posLoaded = true;
+    if (token !== playToken) return;
   }
   if (current.kind === "text" && !current.file && !current.dl_file) {
     const info = await segmentInfo(current.id);
     if (info) segTotal = info.segments || segTotal;
     if (!info || !(info.ready || []).length) {
-      // nothing rendered yet: start the render, then play the first segment
-      await api("/api/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ episode_id: current.id }) });
+      // Render the paragraph cache only — playing must never create a download.
+      await api("/api/episodes/" + current.id + "/segments", { method: "POST" });
     }
     if (!(await waitSegment(segIdx || current.segment_idx || 1))) {
       flash(t("not_ready")); renderBar(); return;
     }
+    if (token !== playToken) return;
   }
+  if (token !== playToken) return;
   const src = source(current);
   if (!src) return;
   const abs = new URL(src, location.origin).href;

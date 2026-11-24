@@ -111,6 +111,7 @@ func main() {
 	mux.HandleFunc("POST /api/settings", handleSettings)
 	mux.HandleFunc("POST /api/tts", handleTTS)
 	mux.HandleFunc("POST /api/episodes/{id}/fulltext", handleEpisodeFullText)
+	mux.HandleFunc("POST /api/episodes/{id}/segments", handleEpisodeSegments)
 	mux.HandleFunc("POST /api/tts/test", handleTTS)
 	mux.HandleFunc("GET /api/config", handleConfig)
 	mux.HandleFunc("GET /api/devices", handleDevices)

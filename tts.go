@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -53,18 +54,28 @@ func ttsConfig() ttsCfg {
 }
 
 var tagRe = regexp.MustCompile(`<[^>]*>`)
+var blockRe = regexp.MustCompile(`(?i)</(p|div|section|article|h[1-6]|li|tr|blockquote|pre|figure)>|<br\s*/?>`)
 
-// plainText turns an HTML show-notes body into speakable text.
+// plainText turns an HTML show-notes body into speakable text, keeping block
+// boundaries as blank lines so the segmenter can split strictly by paragraph.
 func plainText(s string) string {
-	s = tagRe.ReplaceAllString(s, "\n")
+	s = blockRe.ReplaceAllString(s, "\n\n")
+	s = tagRe.ReplaceAllString(s, " ")
 	s = html.UnescapeString(s)
 	lines := strings.Split(s, "\n")
 	var out []string
 	for _, l := range lines {
 		l = strings.TrimSpace(l)
-		if l != "" {
-			out = append(out, l)
+		if l == "" {
+			if len(out) > 0 && out[len(out)-1] != "" {
+				out = append(out, "")
+			}
+			continue
 		}
+		out = append(out, l)
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
 	}
 	return strings.Join(out, "\n")
 }
@@ -78,58 +89,74 @@ func chunkSource(body, desc string) string {
 	return desc
 }
 
-// chunks splits text into request-sized pieces. Short paragraphs are merged up
-// to max so a feed with many one-line paragraphs does not become hundreds of
-// requests; paragraph breaks are still preferred over cutting mid-sentence.
+// chunks splits text strictly by paragraph: one segment per paragraph, and a
+// paragraph longer than max is further split at sentence boundaries (or hard-cut
+// by rune count when there is no punctuation). Short paragraphs are never merged.
 func chunks(text string, max int) []string {
 	if max < 200 {
 		max = 200
 	}
 	var out []string
-	var cur strings.Builder
-	for _, para := range strings.Split(text, "\n") {
-		para = strings.TrimSpace(para)
-		if para == "" {
+	for _, p := range paragraphs(text) {
+		if len([]rune(p)) <= max {
+			out = append(out, p)
 			continue
 		}
-		if cur.Len() == 0 {
-			for len(para) > max {
-				// hard cut at max (Chinese text often has no spaces to break on)
-				cut := max
-				if i := strings.LastIndex(para[:max], " "); i > max/2 {
-					cut = i
-				}
-				out = append(out, strings.TrimSpace(para[:cut]))
-				para = strings.TrimSpace(para[cut:])
-			}
-			if para == "" {
-				continue
-			}
-			cur.WriteString(para)
+		out = append(out, splitLongParagraph(p, max)...)
+	}
+	return out
+}
+
+var blankLineRe = regexp.MustCompile(`\n\s*\n`)
+
+func paragraphs(text string) []string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	var out []string
+	for _, block := range blankLineRe.Split(text, -1) {
+		block = strings.TrimSpace(block)
+		if block == "" {
 			continue
 		}
-		if cur.Len()+len(para)+1 <= max {
-			cur.WriteString("\n")
-			cur.WriteString(para)
-			continue
-		}
-		out = append(out, cur.String())
-		cur.Reset()
-		for len(para) > max {
-			// hard cut at max (Chinese text often has no spaces to break on)
-			cut := max
-			if i := strings.LastIndex(para[:max], " "); i > max/2 {
-				cut = i
+		// A block without blank lines may still be several lines (feeds often put
+		// one paragraph per line); keep those as separate paragraphs too.
+		for _, line := range strings.Split(block, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				out = append(out, line)
 			}
-			out = append(out, strings.TrimSpace(para[:cut]))
-			para = strings.TrimSpace(para[cut:])
-		}
-		if para != "" {
-			cur.WriteString(para)
 		}
 	}
-	if cur.Len() > 0 {
-		out = append(out, cur.String())
+	return out
+}
+
+func sentenceEnd(r rune) bool {
+	switch r {
+	case '。', '！', '？', '.', '!', '?', ';', '；', '…':
+		return true
+	}
+	return false
+}
+
+func splitLongParagraph(p string, max int) []string {
+	runes := []rune(strings.TrimSpace(p))
+	var out []string
+	for len(runes) > max {
+		cut := max
+		for i := max; i > max*2/3; i-- {
+			if sentenceEnd(runes[i-1]) {
+				cut = i
+				break
+			}
+		}
+		piece := strings.TrimSpace(string(runes[:cut]))
+		if piece != "" {
+			out = append(out, piece)
+		}
+		runes = []rune(strings.TrimSpace(string(runes[cut:])))
+	}
+	if len(runes) > 0 {
+		out = append(out, string(runes))
 	}
 	return out
 }
@@ -178,57 +205,13 @@ func (c ttsCfg) speak(ctx context.Context, text string) ([]byte, error) {
 // synthesize renders a text episode into one audio file (the same file path the
 // player and the audiobook packer use).
 func (d *Downloader) synthesize(ctx context.Context, id int64) error {
-	cfg := ttsConfig()
-	var feedTitle, guid, title, body, desc, full string
-	if err := store.db.QueryRow(`SELECT f.title, e.guid, e.title, COALESCE(e.full_text,''), e.body, COALESCE(e.description,'') FROM episodes e
-		JOIN feeds f ON f.id = e.feed_id WHERE e.id = ?`, id).Scan(&feedTitle, &guid, &title, &full, &body, &desc); err != nil {
+	segs, segDir, _, guid, err := d.prepareSegments(ctx, id)
+	if err != nil {
 		return err
-	}
-	text := plainText(full)
-	if text == "" {
-		text = plainText(body)
-	}
-	if text == "" {
-		text = plainText(desc)
-	}
-	if text == "" {
-		text = plainText(title)
-	}
-	if text == "" {
-		return fmt.Errorf("no text to speak")
 	}
 	if d.overLimit() {
 		return fmt.Errorf("storage limit reached")
 	}
-	// TTS chunks are disposable cache; the joined mp3 is a download.
-	segDir := d.segDir(id)
-	if err := os.MkdirAll(segDir, 0o755); err != nil {
-		return err
-	}
-	segs := chunks(text, cfg.MaxChars)
-	_, _ = store.db.Exec(`UPDATE episodes SET segments=?, status='working' WHERE id=?`, len(segs), id)
-
-	// Segments are written one by one so the player can start on the first one
-	// instead of waiting for the whole episode; already-rendered segments are
-	// never re-requested, so a retry only pays for what is missing.
-	for i := range segs {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		sp := filepath.Join(segDir, fmt.Sprintf("%d.mp3", i+1))
-		if st, err := os.Stat(sp); err != nil || st.Size() == 0 {
-			data, err := cfg.speak(ctx, segs[i])
-			if err != nil {
-				_, _ = store.db.Exec(`UPDATE episodes SET status='error' WHERE id=?`, id)
-				return fmt.Errorf("chunk %d: %w", i+1, err)
-			}
-			if err := os.WriteFile(sp, data, 0o644); err != nil {
-				return err
-			}
-		}
-		_, _ = store.db.Exec(`UPDATE episodes SET segments_done=? WHERE id=?`, i+1, id)
-	}
-
 	raw := rawPathFor(id, ".mp3")
 	if err := os.MkdirAll(filepath.Dir(raw), 0o755); err != nil {
 		return err
@@ -254,6 +237,98 @@ func (d *Downloader) synthesize(ctx context.Context, id int64) error {
 	}
 	store.logEvent("episode", guid, "tts")
 	return nil
+}
+
+// prepareSegments renders (or reuses) the per-paragraph cache files only. It does
+// NOT join them into a download: playing a text episode must stay disposable
+// cache until the user explicitly hits download.
+func (d *Downloader) prepareSegments(ctx context.Context, id int64) ([]string, string, ttsCfg, string, error) {
+	cfg := ttsConfig()
+	var guid, title, body, desc, full string
+	if err := store.db.QueryRow(`SELECT e.guid, e.title, COALESCE(e.full_text,''), e.body, COALESCE(e.description,'') FROM episodes e WHERE e.id = ?`, id).
+		Scan(&guid, &title, &full, &body, &desc); err != nil {
+		return nil, "", cfg, "", err
+	}
+	text := plainText(full)
+	if text == "" {
+		text = plainText(body)
+	}
+	if text == "" {
+		text = plainText(desc)
+	}
+	if text == "" {
+		text = plainText(title)
+	}
+	if text == "" {
+		return nil, "", cfg, "", fmt.Errorf("no text to speak")
+	}
+	segDir := d.segDir(id)
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
+		return nil, "", cfg, "", err
+	}
+	segs := chunks(text, cfg.MaxChars)
+	_, _ = store.db.Exec(`UPDATE episodes SET segments=? WHERE id=?`, len(segs), id)
+	for i := range segs {
+		if ctx.Err() != nil {
+			return nil, "", cfg, "", ctx.Err()
+		}
+		sp := filepath.Join(segDir, fmt.Sprintf("%d.mp3", i+1))
+		if st, err := os.Stat(sp); err != nil || st.Size() == 0 {
+			data, err := cfg.speak(ctx, segs[i])
+			if err != nil {
+				store.logEvent("episode", guid, "tts_error: "+err.Error())
+				return nil, "", cfg, "", fmt.Errorf("chunk %d: %w", i+1, err)
+			}
+			if err := os.WriteFile(sp, data, 0o644); err != nil {
+				return nil, "", cfg, "", err
+			}
+		}
+		_, _ = store.db.Exec(`UPDATE episodes SET segments_done=? WHERE id=?`, i+1, id)
+	}
+	return segs, segDir, cfg, guid, nil
+}
+
+// renderSegmentsOnly is the playback path: build the segment cache, never a download.
+func (d *Downloader) renderSegmentsOnly(ctx context.Context, id int64) error {
+	_, _, _, _, err := d.prepareSegments(ctx, id)
+	return err
+}
+
+// handleEpisodeSegments: POST /api/episodes/{id}/segments — start rendering the
+// paragraph cache for instant playback (no permanent file).
+func handleEpisodeSegments(w http.ResponseWriter, r *http.Request) {
+	id := int64(atoi(r.PathValue("id")))
+	if id == 0 || !episodeOwned(userID(r), id) {
+		writeJSON(w, map[string]any{"error": "episode not found"})
+		return
+	}
+	startSegmentRender(id)
+	writeJSON(w, map[string]any{"ok": true, "queued": true})
+}
+
+var segRendering = map[int64]bool{}
+var segRenderMu sync.Mutex
+
+func startSegmentRender(id int64) {
+	segRenderMu.Lock()
+	if segRendering[id] {
+		segRenderMu.Unlock()
+		return
+	}
+	segRendering[id] = true
+	segRenderMu.Unlock()
+	go func() {
+		defer func() {
+			segRenderMu.Lock()
+			delete(segRendering, id)
+			segRenderMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		if err := dl.renderSegmentsOnly(ctx, id); err != nil {
+			store.logEvent("episode", itoa(id), "segments_error: "+err.Error())
+		}
+	}()
 }
 
 // testTTS sends one short line so the Settings page can verify a configured
@@ -377,60 +452,26 @@ func handleSpeak(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `inline; filename="`+safeName(title)+`.mp3"`)
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	n, _ := w.Write(first)
+	_, _ = w.Write(first)
 	if flusher != nil {
 		flusher.Flush()
 	}
-	raw := rawPathFor(id, ".mp3")
-	_ = os.MkdirAll(filepath.Dir(raw), 0o755)
-	f, err := os.Create(raw)
-	if err == nil {
-		_, _ = f.Write(first)
-	}
 	for i := 1; i < len(segs); i++ {
 		if r.Context().Err() != nil {
-			if f != nil {
-				f.Close()
-				_ = os.Remove(raw)
-			}
 			return
 		}
 		b, err := getChunk(i)
 		if err != nil {
-			// headers are already sent: stop the stream, keep what we have
-			if f != nil {
-				f.Close()
-				_ = os.Remove(raw)
-			}
+			// headers are already sent: stop the stream, keep the cached chunks
 			return
 		}
 		if _, err := w.Write(b); err != nil {
-			if f != nil {
-				f.Close()
-				_ = os.Remove(raw)
-			}
 			return
-		}
-		n += len(b)
-		if f != nil {
-			_, _ = f.Write(b)
 		}
 		if flusher != nil {
 			flusher.Flush()
 		}
 	}
-	if f != nil {
-		f.Close()
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			if _, err := finishDownload(ctx, id, raw); err != nil {
-				// the client already received the audio; do not turn the episode red
-				store.logEvent("episode", itoa(id), "speak_finish_error: "+err.Error())
-			}
-		}()
-	}
-	_ = n
 }
 
 // ttsVoice is one voice id returned by an OpenAI-compatible TTS server.

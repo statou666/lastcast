@@ -47,7 +47,10 @@ func feedSlugOf(id int64) string {
 }
 
 func segmentDirFor(id int64) string {
-	return filepath.Join(cacheRoot(), feedSlugOf(id), strconv.FormatInt(id, 10))
+	// The "p2" suffix invalidates segment caches created before strict paragraph
+	// chunking (indexes no longer mean the same text). Old files are disposable
+	// cache and are removed by the normal cache eviction.
+	return filepath.Join(cacheRoot(), feedSlugOf(id), strconv.FormatInt(id, 10)+"-p2")
 }
 
 func segmentFileFor(id int64, n int) string {

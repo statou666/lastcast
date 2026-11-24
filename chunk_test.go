@@ -19,9 +19,9 @@ func TestChunks(t *testing.T) {
 		max  int
 		want int
 	}{
-		{"single long chinese paragraph", long, 120, 7},
-		{"short paragraphs merge", strings.Join([]string{short, short}, "\n"), 200, 1},
-		{"four short paragraphs", strings.Join([]string{short, short, short, short}, "\n"), 200, 2},
+		{"single long chinese paragraph", long, 120, 3},
+		{"short paragraphs stay separate", strings.Join([]string{short, short}, "\n"), 200, 2},
+		{"four short paragraphs", strings.Join([]string{short, short, short, short}, "\n"), 200, 4},
 	}
 	for _, c := range cases {
 		effMax := c.max
@@ -36,19 +36,19 @@ func TestChunks(t *testing.T) {
 			if part == "" {
 				t.Fatalf("%s: empty chunk at %d", c.name, i)
 			}
-			if len(part) > effMax {
-				t.Fatalf("%s: chunk %d is %d bytes, exceeds effective max %d", c.name, i, len(part), effMax)
+			if len([]rune(part)) > effMax {
+				t.Fatalf("%s: chunk %d is %d runes, exceeds effective max %d", c.name, i, len([]rune(part)), effMax)
 			}
 		}
 		want := 0
 		for _, p := range strings.Split(c.text, "\n") {
 			if p = strings.TrimSpace(p); p != "" {
-				want += len(p)
+				want += len([]rune(strings.Join(strings.Fields(p), "")))
 			}
 		}
 		gotLen := 0
 		for _, part := range got {
-			gotLen += len(strings.ReplaceAll(part, "\n", ""))
+			gotLen += len([]rune(strings.Join(strings.Fields(part), "")))
 		}
 		if gotLen != want {
 			t.Fatalf("%s: content lost (%d vs %d)", c.name, gotLen, want)
