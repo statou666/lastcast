@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func (s *Store) getSetting(key, def string) string {
@@ -165,12 +168,17 @@ func handleOpmlExport(w http.ResponseWriter, r *http.Request) {
 // (audio / video / text) from what it actually contains. Categories are left to
 // the user (they are never inferred from OPML folders).
 func handleOpmlImport(w http.ResponseWriter, r *http.Request) {
-	if r.ContentLength == 0 {
-		writeJSON(w, map[string]any{"error": "empty body"})
+	data, err := io.ReadAll(io.LimitReader(r.Body, 20<<20))
+	if err != nil {
+		writeJSON(w, map[string]any{"error": "cannot read request body"})
+		return
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		writeJSON(w, map[string]any{"error": "empty body: choose a local .opml file or paste its content"})
 		return
 	}
 	var urls []string
-	dec := xml.NewDecoder(r.Body)
+	dec := xml.NewDecoder(bytes.NewReader(data))
 	seen := map[string]bool{}
 	for {
 		t, err := dec.Token()

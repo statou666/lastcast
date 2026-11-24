@@ -495,3 +495,12 @@ body[data-theme="light"] #selbar { background: rgba(255, 255, 255, .98); }
   #selbar { bottom: calc(var(--nav-h) + 128px + 10px + env(safe-area-inset-bottom)); }
   body.selecting .content { padding-bottom: calc(var(--player-h) + var(--nav-h) + 140px + env(safe-area-inset-bottom)); }
 }
+
+/* ---------- file picker + TTS voice detection ---------- */
+.filepick { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 10px 12px;
+  border: 1px dashed var(--line); border-radius: 12px; background: var(--panel-2); cursor: pointer; }
+.filepick:hover { border-color: var(--accent); }
+.filepick input[type="file"] { min-height: 0; padding: 4px; background: transparent; border: 0; color: var(--mut); font-size: 13px; }
+.voicepick { display: flex; gap: 8px; width: 100%; }
+.voicepick input { flex: 1; min-width: 0; }
+.voicepick button { flex: none; white-space: nowrap; }

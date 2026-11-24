@@ -7,7 +7,10 @@ const DICT = {
     old_password: "Current password", new_password: "New password", change_password: "Change password",
     card_gpodder: "Podcast app (gPodder)", gpodder_server: "Sync server", gpodder_feeds: "Feed URLs (add these in the app)",
     gpodder_hint: "AntennaPod → Settings → Synchronization → gPodder: enter the server URL, your username and password. Then add one of the feed URLs below — video and text episodes play instantly through Lastcast.",
-    copy: "Copy", copied: "Copied", import_done: "Imported {n} feed(s)", select: "Select", select_all: "All", select_none: "None",
+    copy: "Copy", copied: "Copied", import_done: "Imported {n} feed(s)",
+    opml_pick: "Choose a local .opml file", opml_hint: "Pick a .opml file from this computer, or paste its content below.",
+    opml_empty: "Choose a file or paste OPML content first.",
+    detect_voices: "Detect voices", voices_found: "{n} voices found", voices_failed: "Detection failed — you can type a voice id", select: "Select", select_all: "All", select_none: "None",
     select_exit: "Done", selected: "selected", confirm_delete_n: "Delete {n} selected item(s)?", kind: "Type",
     password_changed: "Password updated", proxy_url: "HTTP proxy (optional)",
     add_user: "Add user", role_user: "User", role_admin: "Administrator", users_admin_note: "Only administrators can change instance settings.",
@@ -50,7 +53,10 @@ const DICT = {
     old_password: "当前密码", new_password: "新密码", change_password: "修改密码",
     card_gpodder: "播客客户端（gPodder）", gpodder_server: "同步服务器", gpodder_feeds: "源地址（在客户端里添加）",
     gpodder_hint: "AntennaPod → 设置 → 同步 → gPodder：填同步服务器、用户名和密码；然后在客户端里添加下面任意一个源地址。视频和文字条目都会通过 Lastcast 即时播放。",
-    copy: "复制", copied: "已复制", import_done: "已导入 {n} 个源", select: "多选", select_all: "全选", select_none: "取消选择",
+    copy: "复制", copied: "已复制", import_done: "已导入 {n} 个源",
+    opml_pick: "选择本机 .opml 文件", opml_hint: "从电脑里选一个 .opml 文件，或把内容粘贴到下面。",
+    opml_empty: "请先选择文件或粘贴 OPML 内容。",
+    detect_voices: "检测音色", voices_found: "检测到 {n} 个音色", voices_failed: "检测失败，可直接填写音色 ID", select: "多选", select_all: "全选", select_none: "取消选择",
     select_exit: "完成", selected: "已选", confirm_delete_n: "确定删除选中的 {n} 项？", kind: "类型",
     password_changed: "密码已更新", proxy_url: "代理地址（可选）",
     add_user: "添加用户", role_user: "普通用户", role_admin: "管理员", users_admin_note: "只有管理员能修改实例设置。",
@@ -680,12 +686,29 @@ async function renderGpodder() {
     </li>`).join("") || `<p class="mut">—</p>`;
 }
 
+// Suggested voice ids; the real list is fetched from the provider's
+// /audio/voices endpoint (OpenAI-compatible servers vary a lot).
+const VOICE_DEFAULTS = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse",
+  "zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural", "zh-CN-YunyangNeural",
+  "en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural"];
+let detectedVoices = [];
+
+function fillVoices(list) {
+  const dl = document.getElementById("tts-voice-list");
+  if (!dl) return;
+  dl.innerHTML = (list || []).map((v) => {
+    const id = typeof v === "string" ? v : (v.id || v.name || "");
+    const label = typeof v === "string" ? v : (v.name || v.id || "");
+    return id ? `<option value="${esc(id)}" label="${esc(label)}">` : "";
+  }).join("");
+}
+
 async function renderSettings() {
   const s = await api("/api/settings");
   ADMIN = s.is_admin === "1";
   const note = document.getElementById("admin-note");
   if (note) note.hidden = ADMIN;
-  for (const id of ["s-save", "tts-save", "tts-test", "cache-clear", "cache-evict"]) {
+  for (const id of ["s-save", "tts-save", "tts-test", "tts-detect", "cache-clear", "cache-evict"]) {
     const b = document.getElementById(id);
     if (b) b.disabled = !ADMIN;
   }
@@ -701,6 +724,7 @@ async function renderSettings() {
   document.getElementById("tts-key").value = s.tts_key || "";
   document.getElementById("tts-model").value = s.tts_model || "";
   document.getElementById("tts-voice").value = s.tts_voice || "";
+  fillVoices(detectedVoices.length ? detectedVoices : VOICE_DEFAULTS);
   document.getElementById("tts-speed").value = s.tts_speed || "1";
   document.getElementById("tts-max").value = s.tts_max_chars || "3000";
   document.getElementById("tts-auto").checked = (s.tts_auto || "1") === "1";
@@ -962,8 +986,18 @@ document.getElementById("addfeed").addEventListener("submit", async (ev) => {
   flash(r.error || "");
   renderFeeds();
 });
+const opmlFileInput = document.getElementById("opml-file");
+if (opmlFileInput) opmlFileInput.addEventListener("change", async () => {
+  const f = opmlFileInput.files && opmlFileInput.files[0];
+  if (!f) return;
+  document.getElementById("opml-in").value = await f.text();
+  document.getElementById("opml-msg").textContent = f.name;
+});
 document.getElementById("opml-import").addEventListener("click", async () => {
-  const r = await fetch("/api/opml", { method: "POST", body: document.getElementById("opml-in").value });
+  const msg = document.getElementById("opml-msg");
+  const body = document.getElementById("opml-in").value.trim();
+  if (!body) { msg.textContent = t("opml_empty"); return; }
+  const r = await fetch("/api/opml", { method: "POST", body });
   const j = await r.json();
   document.getElementById("opml-msg").textContent = j.error ? j.error :
     (t("import_done").replace("{n}", j.added || 0) + " · " +
@@ -1008,6 +1042,24 @@ document.getElementById("tts-test").addEventListener("click", async () => {
   flash("…");
   const r = await api("/api/tts/test", { method: "POST" });
   flash(r.error || (t("tts_test") + " ✓ " + r.bytes + " bytes"));
+});
+document.getElementById("tts-detect").addEventListener("click", async () => {
+  const msg = document.getElementById("tts-voice-msg");
+  if (msg) msg.textContent = "…";
+  const r = await api("/api/tts/voices");
+  if (!r || r.error) {
+    if (r && r.voices) fillVoices(r.voices);
+    if (msg) msg.textContent = (r && r.error) || t("voices_failed");
+    return;
+  }
+  detectedVoices = r.voices || [];
+  fillVoices(detectedVoices);
+  if (msg) msg.textContent = t("voices_found").replace("{n}", detectedVoices.length);
+  const input = document.getElementById("tts-voice");
+  if (input && !input.value && detectedVoices.length) {
+    const first = detectedVoices[0];
+    input.value = typeof first === "string" ? first : (first.id || first.name || "");
+  }
 });
 document.getElementById("syncnow").addEventListener("click", async () => {
   localStorage.setItem("device_name", document.getElementById("device_name").value);

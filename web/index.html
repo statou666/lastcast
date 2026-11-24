@@ -11,7 +11,7 @@
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=10">
+<link rel="stylesheet" href="/style.css?v=13">
 </head>
 <body>
 <div class="shell">
@@ -105,9 +105,13 @@
       <section class="card">
         <h3 data-i18n="opml"></h3>
         <a id="opml-export" href="/api/opml" data-i18n="export" class="btn"></a>
+        <label class="filepick">
+          <input id="opml-file" type="file" accept=".opml,.xml,text/xml,application/xml">
+          <span data-i18n="opml_pick"></span>
+        </label>
         <textarea id="opml-in" rows="6" placeholder="&lt;opml&gt;…&lt;/opml&gt;" style="margin-top:10px"></textarea>
         <button id="opml-import" data-i18n="import" style="margin-top:10px"></button>
-        <div class="mut" id="opml-msg"></div>
+        <div class="mut" id="opml-msg" data-i18n="opml_hint"></div>
       </section>
     </section>
 
@@ -188,20 +192,14 @@
         <div class="kv"><label data-i18n="tts_base"></label><input id="tts-base" placeholder="https://api.openai.com/v1"></div>
         <div class="kv"><label data-i18n="tts_key"></label><input id="tts-key" type="password"></div>
         <div class="kv"><label data-i18n="tts_model"></label><input id="tts-model" placeholder="tts-1"></div>
-        <div class="kv"><label data-i18n="tts_voice"></label><select id="tts-voice">
-          <option value="alloy">alloy</option>
-          <option value="zh-CN-XiaoxiaoNeural">zh-CN-XiaoxiaoNeural · 晓晓</option>
-          <option value="zh-CN-XiaoyiNeural">zh-CN-XiaoyiNeural · 晓伊</option>
-          <option value="zh-CN-YunxiNeural">zh-CN-YunxiNeural · 云希</option>
-          <option value="zh-CN-YunjianNeural">zh-CN-YunjianNeural · 云健</option>
-          <option value="zh-CN-YunyangNeural">zh-CN-YunyangNeural · 云扬</option>
-          <option value="zh-CN-YunxiaNeural">zh-CN-YunxiaNeural · 云夏</option>
-          <option value="nova">nova (en-US-AriaNeural)</option>
-          <option value="onyx">onyx (en-US-EricNeural)</option>
-          <option value="sage">sage (en-US-JennyNeural)</option>
-          <option value="shimmer">shimmer (en-US-EmmaNeural)</option>
-          <option value="verse">verse (en-US-BrianNeural)</option>
-        </select></div>
+        <div class="kv"><label data-i18n="tts_voice"></label>
+          <div class="voicepick">
+            <input id="tts-voice" list="tts-voice-list" placeholder="voice id / 名称">
+            <button id="tts-detect" type="button" data-i18n="detect_voices"></button>
+          </div>
+        </div>
+        <datalist id="tts-voice-list"></datalist>
+        <div class="mut" id="tts-voice-msg"></div>
         <div class="kv"><label data-i18n="tts_speed"></label><input id="tts-speed" type="number" step="0.1" min="0.5" max="2"></div>
         <div class="kv"><label data-i18n="tts_max"></label><input id="tts-max" type="number" min="200"></div>
         <div class="kv"><label data-i18n="tts_auto"></label><input id="tts-auto" type="checkbox"></div>
@@ -285,6 +283,6 @@
   <div class="ptime"><span id="bar-time">00:00</span><span class="mut" id="bar-rem"></span></div>
   <audio id="audio"></audio>
 </footer>
-<script src="/app.js?v=10"></script>
+<script src="/app.js?v=13"></script>
 </body>
 </html>

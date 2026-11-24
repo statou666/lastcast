@@ -127,6 +127,7 @@ func main() {
 	mux.HandleFunc("/api/logout", handleLogout)
 	mux.HandleFunc("/api/me", handleMe)
 	mux.HandleFunc("POST /api/me/password", handlePassword)
+	mux.HandleFunc("GET /api/tts/voices", handleTTSVoices)
 	mux.HandleFunc("POST /api/batch", handleBatch)
 	mux.HandleFunc("GET /api/gpodder", handleGpodderInfo)
 	mux.HandleFunc("/api/2/", gpodRouter)

@@ -426,3 +426,124 @@ func handleSpeak(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = n
 }
+
+// ttsVoice is one voice id returned by an OpenAI-compatible TTS server.
+type ttsVoice struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+func defaultTTSVoices() []ttsVoice {
+	ids := []string{"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse",
+		"zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural", "zh-CN-YunyangNeural",
+		"en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural"}
+	out := make([]ttsVoice, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, ttsVoice{ID: id})
+	}
+	return out
+}
+
+// parseVoiceList accepts the handful of shapes OpenAI-compatible TTS servers use:
+// ["alloy"], {"voices":[{"id":..,"name":..}]}, {"data":[{"id":..}]}, flat objects.
+func parseVoiceList(data []byte) []ttsVoice {
+	var root any
+	if json.Unmarshal(data, &root) != nil {
+		return nil
+	}
+	var items []any
+	switch v := root.(type) {
+	case []any:
+		items = v
+	case map[string]any:
+		for _, key := range []string{"voices", "data", "items", "models"} {
+			if arr, ok := v[key].([]any); ok {
+				items = arr
+				break
+			}
+		}
+	}
+	out := []ttsVoice{}
+	seen := map[string]bool{}
+	for _, it := range items {
+		switch x := it.(type) {
+		case string:
+			if x != "" && !seen[x] {
+				out = append(out, ttsVoice{ID: x})
+				seen[x] = true
+			}
+		case map[string]any:
+			id, _ := x["id"].(string)
+			name, _ := x["name"].(string)
+			if id == "" {
+				id, _ = x["voice"].(string)
+			}
+			if id == "" {
+				id = name
+			}
+			if id == "" || seen[id] {
+				continue
+			}
+			if name == "" || name == id {
+				name = ""
+			}
+			out = append(out, ttsVoice{ID: id, Name: name})
+			seen[id] = true
+		}
+	}
+	return out
+}
+
+// fetchTTSVoices asks the configured provider for its voice list.
+func fetchTTSVoices(ctx context.Context) ([]ttsVoice, error) {
+	cfg := ttsConfig()
+	if cfg.Provider == "off" {
+		return nil, fmt.Errorf("tts is off")
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	paths := []string{"/audio/voices", "/voices", "/audio/speech/voices"}
+	var lastErr error
+	for _, p := range paths {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.Base+p, nil)
+		if err != nil {
+			continue
+		}
+		if cfg.Key != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.Key)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			lastErr = fmt.Errorf("%s: HTTP %d", p, resp.StatusCode)
+			continue
+		}
+		if vs := parseVoiceList(body); len(vs) > 0 {
+			return vs, nil
+		}
+		lastErr = fmt.Errorf("%s: no voices in response", p)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no voice list endpoint found")
+	}
+	return nil, lastErr
+}
+
+// handleTTSVoices lists the provider's voices so the UI is not limited to a
+// hardcoded list. Admins only (it uses the stored key).
+func handleTTSVoices(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		writeJSONStatus(w, http.StatusForbidden, map[string]any{"error": "admin only"})
+		return
+	}
+	vs, err := fetchTTSVoices(r.Context())
+	if err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error(), "voices": defaultTTSVoices()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "voices": vs, "count": len(vs)})
+}
