@@ -214,16 +214,28 @@ function reportProgress(extra, keepalive) {
 function setBar(ep) {
   playToken++;
   const prev = current && current.id;
-  if (prev && prev !== ep.id) {
+  const switched = !!(prev && prev !== ep.id);
+  if (switched) {
     // Switching episodes must silence the old one immediately, before any
-    // segment lookup / network wait for the new one.
+    // segment lookup / network wait for the new one. Segment counters belong to
+    // the old episode, so reset them: a new episode must never inherit the
+    // previous one's position.
     try { audio.pause(); } catch (e) {}
     try { audio.removeAttribute("src"); audio.load(); } catch (e) {}
     pendingSeek = 0;
+    segIdx = 0;
+    segTotal = 0;
   }
   current = ep;
   current._posLoaded = false;
-  if (segEp(ep)) { segTotal = ep.segments || segTotal; segIdx = ep.segment_idx || segIdx || 1; }
+  current._rep = 0;
+  if (segEp(ep)) {
+    segTotal = ep.segments || 0;
+    segIdx = switched ? (ep.segment_idx || 1) : (segIdx || ep.segment_idx || 1);
+  } else if (switched) {
+    segIdx = 0;
+    segTotal = 0;
+  }
   barTitle.textContent = ep.title || "";
   pcover.src = ep.cover_url || "";
   // The playing row is a link to the episode detail page too.
@@ -268,7 +280,7 @@ async function segmentInfo(id) {
 
 async function waitSegment(n) {
   const waitingFor = current && current.id;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 30; i++) {
     if (!current || current.id !== waitingFor) return false;
     const r = await segmentInfo(current.id);
     if (r) {
@@ -276,8 +288,8 @@ async function waitSegment(n) {
       if (current) current.segments = segTotal;
       if ((r.ready || []).indexOf(n) >= 0) { segIdx = n; return true; }
     }
-    if (i >= 20) return false;
-    await new Promise((res) => setTimeout(res, 1500));
+    if (i >= 29) return false;
+    await new Promise((res) => setTimeout(res, 800));
   }
   return false;
 }
@@ -300,13 +312,22 @@ async function play() {
     if (token !== playToken) return;
   }
   if (current.kind === "text" && !current.file && !current.dl_file) {
+    const seg = segIdx || current.segment_idx || 1;
     const info = await segmentInfo(current.id);
-    if (info) segTotal = info.segments || segTotal;
-    if (!info || !(info.ready || []).length) {
-      // Render the paragraph cache only — playing must never create a download.
-      await api("/api/episodes/" + current.id + "/segments", { method: "POST" });
+    if (info) {
+      segTotal = info.segments || segTotal;
+      current.segments = info.segments || current.segments || 0;
     }
-    if (!(await waitSegment(segIdx || current.segment_idx || 1))) {
+    if (!info || (info.ready || []).indexOf(seg) < 0) {
+      // Render just this paragraph — playing must never create a download, and
+      // must never queue the whole article (switching would then stall).
+      await api("/api/episodes/" + current.id + "/segments", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ segment: seg }),
+      });
+    }
+    segIdx = seg;
+    if (!(await waitSegment(seg))) {
       flash(t("not_ready")); renderBar(); return;
     }
     if (token !== playToken) return;
@@ -315,9 +336,19 @@ async function play() {
   const src = source(current);
   if (!src) return;
   const abs = new URL(src, location.origin).href;
-  if (audio.src !== abs) { pendingSeek = current.position || 0; audio.src = abs; }
+  if (audio.src !== abs) { pendingSeek = segEp(current) ? 0 : (current.position || 0); audio.src = abs; }
   audio.playbackRate = parseFloat(document.getElementById("speed").value) || 1;
   audio.play().catch(() => {});
+  // Prefetch the next paragraph in the background so advancing is instant.
+  if (segEp(current)) {
+    const next = (segIdx || 1) + 1;
+    if (!segTotal || next <= segTotal) {
+      api("/api/episodes/" + current.id + "/segments", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ segment: next }),
+      }).catch(() => {});
+    }
+  }
   playBtn.textContent = t("pause");
   if ("mediaSession" in navigator) {
     navigator.mediaSession.setActionHandler("play", play);
@@ -400,7 +431,11 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 audio.addEventListener("ended", async () => {
   if (current && segEp(current) && segTotal && segIdx < segTotal) {
     const next = segIdx + 1;
-    if (await waitSegment(next)) { audio.src = new URL(source(current), location.origin).href; audio.currentTime = 0; audio.play().catch(() => {}); renderBar(); return; }
+    api("/api/episodes/" + current.id + "/segments", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ segment: next }),
+    }).catch(() => {});
+    if (await waitSegment(next)) { segIdx = next; audio.src = new URL(source(current), location.origin).href; audio.currentTime = 0; audio.play().catch(() => {}); renderBar(); return; }
     playBtn.textContent = t("play");
     return;
   }

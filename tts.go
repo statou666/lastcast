@@ -242,14 +242,13 @@ func (d *Downloader) synthesize(ctx context.Context, id int64) error {
 // prepareSegments renders (or reuses) the per-paragraph cache files only. It does
 // NOT join them into a download: playing a text episode must stay disposable
 // cache until the user explicitly hits download.
-func (d *Downloader) prepareSegments(ctx context.Context, id int64) ([]string, string, ttsCfg, string, error) {
-	cfg := ttsConfig()
-	var guid, title, body, desc, full string
+func episodeTextForTTS(id int64) (guid, text string, err error) {
+	var title, body, desc, full string
 	if err := store.db.QueryRow(`SELECT e.guid, e.title, COALESCE(e.full_text,''), e.body, COALESCE(e.description,'') FROM episodes e WHERE e.id = ?`, id).
 		Scan(&guid, &title, &full, &body, &desc); err != nil {
-		return nil, "", cfg, "", err
+		return "", "", err
 	}
-	text := plainText(full)
+	text = plainText(full)
 	if text == "" {
 		text = plainText(body)
 	}
@@ -260,7 +259,16 @@ func (d *Downloader) prepareSegments(ctx context.Context, id int64) ([]string, s
 		text = plainText(title)
 	}
 	if text == "" {
-		return nil, "", cfg, "", fmt.Errorf("no text to speak")
+		return "", "", fmt.Errorf("no text to speak")
+	}
+	return guid, text, nil
+}
+
+func (d *Downloader) prepareSegments(ctx context.Context, id int64) ([]string, string, ttsCfg, string, error) {
+	cfg := ttsConfig()
+	guid, text, err := episodeTextForTTS(id)
+	if err != nil {
+		return nil, "", cfg, "", err
 	}
 	segDir := d.segDir(id)
 	if err := os.MkdirAll(segDir, 0o755); err != nil {
@@ -288,6 +296,39 @@ func (d *Downloader) prepareSegments(ctx context.Context, id int64) ([]string, s
 	return segs, segDir, cfg, guid, nil
 }
 
+// renderOneSegment renders just one paragraph (the player asks for the next one
+// only when it needs it, so switching episodes never queues a whole article).
+func (d *Downloader) renderOneSegment(ctx context.Context, id int64, n int) error {
+	cfg := ttsConfig()
+	guid, text, err := episodeTextForTTS(id)
+	if err != nil {
+		return err
+	}
+	segs := chunks(text, cfg.MaxChars)
+	if n < 1 || n > len(segs) {
+		return fmt.Errorf("segment %d out of range (total %d)", n, len(segs))
+	}
+	segDir := d.segDir(id)
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
+		return err
+	}
+	sp := filepath.Join(segDir, fmt.Sprintf("%d.mp3", n))
+	if st, err := os.Stat(sp); err == nil && st.Size() > 0 {
+		_, _ = store.db.Exec(`UPDATE episodes SET segments=? WHERE id=?`, len(segs), id)
+		return nil
+	}
+	data, err := cfg.speak(ctx, segs[n-1])
+	if err != nil {
+		store.logEvent("episode", guid, "tts_error: "+err.Error())
+		return fmt.Errorf("chunk %d: %w", n, err)
+	}
+	if err := os.WriteFile(sp, data, 0o644); err != nil {
+		return err
+	}
+	_, _ = store.db.Exec(`UPDATE episodes SET segments=?, segments_done=? WHERE id=?`, len(segs), countSegments(segDir), id)
+	return nil
+}
+
 // renderSegmentsOnly is the playback path: build the segment cache, never a download.
 func (d *Downloader) renderSegmentsOnly(ctx context.Context, id int64) error {
 	_, _, _, _, err := d.prepareSegments(ctx, id)
@@ -302,30 +343,38 @@ func handleEpisodeSegments(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"error": "episode not found"})
 		return
 	}
-	startSegmentRender(id)
-	writeJSON(w, map[string]any{"ok": true, "queued": true})
+	var body struct {
+		Segment int `json:"segment"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Segment <= 0 {
+		body.Segment = 1
+	}
+	startSegmentRender(id, body.Segment)
+	writeJSON(w, map[string]any{"ok": true, "queued": true, "segment": body.Segment})
 }
 
-var segRendering = map[int64]bool{}
+var segRendering = map[string]bool{}
 var segRenderMu sync.Mutex
 
-func startSegmentRender(id int64) {
+func startSegmentRender(id int64, n int) {
+	key := fmt.Sprintf("%d:%d", id, n)
 	segRenderMu.Lock()
-	if segRendering[id] {
+	if segRendering[key] {
 		segRenderMu.Unlock()
 		return
 	}
-	segRendering[id] = true
+	segRendering[key] = true
 	segRenderMu.Unlock()
 	go func() {
 		defer func() {
 			segRenderMu.Lock()
-			delete(segRendering, id)
+			delete(segRendering, key)
 			segRenderMu.Unlock()
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		if err := dl.renderSegmentsOnly(ctx, id); err != nil {
+		if err := dl.renderOneSegment(ctx, id, n); err != nil {
 			store.logEvent("episode", itoa(id), "segments_error: "+err.Error())
 		}
 	}()
