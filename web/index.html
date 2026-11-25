@@ -11,7 +11,7 @@
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=20">
+<link rel="stylesheet" href="/style.css?v=22">
 </head>
 <body>
 <div class="shell">
@@ -40,6 +40,10 @@
       <a class="navlink" href="#/downloads" data-view="downloads">
         <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11m0 0 4-4m-4 4-4-4M4.5 19.5h15"/></svg></span>
         <span data-i18n="nav_downloads"></span>
+      </a>
+      <a class="navlink" href="#/history" data-view="history">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5"/></svg></span>
+        <span data-i18n="nav_history"></span>
       </a>
       <a class="navlink" href="#/settings" data-view="settings">
         <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7.5h9M18.5 7.5H20M4 16.5h5M13.5 16.5H20"/><circle cx="15.7" cy="7.5" r="2.2"/><circle cx="11" cy="16.5" r="2.2"/></svg></span>
@@ -144,6 +148,11 @@
       <ul id="downloads" class="list"></ul>
     </section>
 
+    <section class="view" id="view-history" hidden>
+      <h1 data-i18n="nav_history"></h1>
+      <ul id="history" class="list"></ul>
+    </section>
+
     <section class="view" id="view-settings" hidden>
       <h1 data-i18n="nav_settings"></h1>
       <section class="card">
@@ -173,6 +182,7 @@
         <div class="kv"><label data-i18n="fetch_interval"></label><input id="s-fetch" type="number" min="1"></div>
         <div class="kv"><label data-i18n="concurrency"></label><input id="s-conc" type="number" min="1" max="8"></div>
         <div class="kv"><label data-i18n="conflict_rule"></label><select id="s-rule"><option>max</option><option>latest</option></select></div>
+        <div class="kv"><label data-i18n="download_tag"></label><select id="s-tag"><option value="1">on</option><option value="0">off</option></select></div>
         <div class="kv"><label data-i18n="auto_download"></label><input id="s-auto" type="checkbox"></div>
         <div class="kv"><label data-i18n="storage_limit"></label><input id="s-limit" type="number" min="0"></div>
         <div class="kv"><label data-i18n="ui_theme"></label><select id="s-theme"><option>dark</option><option>light</option></select></div>
@@ -287,6 +297,6 @@
   </div>
   <audio id="audio"></audio>
 </footer>
-<script src="/app.js?v=20"></script>
+<script src="/app.js?v=22"></script>
 </body>
 </html>

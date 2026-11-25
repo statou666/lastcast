@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -202,9 +203,40 @@ func (c ttsCfg) speak(ctx context.Context, text string) ([]byte, error) {
 	return data, nil
 }
 
+// padSegment prepends a short silence to a rendered segment. TTS endpoints trim
+// leading silence hard, which clips the first syllable ("swallowed" opening
+// words); a 120ms lead-in keeps the opening audible. ffmpeg-only (full image):
+// the raw provider bytes are kept as-is when ffmpeg is absent.
+func padSegment(ctx context.Context, segDir, sp string) {
+	if _, err := exec.LookPath(ffmpegPath()); err != nil {
+		return
+	}
+	sil := filepath.Join(segDir, "_silence.mp3")
+	if st, err := os.Stat(sil); err != nil || st.Size() == 0 {
+		if _, err := exec.CommandContext(ctx, ffmpegPath(), "-hide_banner", "-loglevel", "error", "-y",
+			"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.12",
+			"-c:a", "libmp3lame", "-b:a", "64k", sil).CombinedOutput(); err != nil {
+			_ = os.Remove(sil)
+			return
+		}
+	}
+	tmp := sp + ".pad"
+	if _, err := exec.CommandContext(ctx, ffmpegPath(), "-hide_banner", "-loglevel", "error", "-y",
+		"-i", sil, "-i", sp, "-filter_complex", "[0][1]concat=n=2:v=0:a=1",
+		"-c:a", "libmp3lame", "-b:a", "128k", tmp).CombinedOutput(); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
+	if st, err := os.Stat(tmp); err != nil || st.Size() == 0 {
+		_ = os.Remove(tmp)
+		return
+	}
+	_ = os.Rename(tmp, sp)
+}
+
 // synthesize renders a text episode into one audio file (the same file path the
 // player and the audiobook packer use).
-func (d *Downloader) synthesize(ctx context.Context, id int64) error {
+func (d *Downloader) synthesize(ctx context.Context, uid, id int64) error {
 	segs, segDir, _, guid, err := d.prepareSegments(ctx, id)
 	if err != nil {
 		return err
@@ -216,6 +248,7 @@ func (d *Downloader) synthesize(ctx context.Context, id int64) error {
 	if err := os.MkdirAll(filepath.Dir(raw), 0o755); err != nil {
 		return err
 	}
+	d.setProgress(uid, id, 0, int64(len(segs)), "rendering")
 	f, err := os.Create(raw)
 	if err != nil {
 		return err
@@ -230,6 +263,7 @@ func (d *Downloader) synthesize(ctx context.Context, id int64) error {
 			f.Close()
 			return err
 		}
+		d.setProgress(uid, id, int64(i+1), int64(len(segs)), "rendering")
 	}
 	f.Close()
 	if _, err := finishDownload(ctx, id, raw); err != nil {
@@ -290,6 +324,7 @@ func (d *Downloader) prepareSegments(ctx context.Context, id int64) ([]string, s
 			if err := os.WriteFile(sp, data, 0o644); err != nil {
 				return nil, "", cfg, "", err
 			}
+			padSegment(ctx, segDir, sp)
 		}
 		_, _ = store.db.Exec(`UPDATE episodes SET segments_done=? WHERE id=?`, i+1, id)
 	}
@@ -325,6 +360,7 @@ func (d *Downloader) renderOneSegment(ctx context.Context, id int64, n int) erro
 	if err := os.WriteFile(sp, data, 0o644); err != nil {
 		return err
 	}
+	padSegment(ctx, segDir, sp)
 	_, _ = store.db.Exec(`UPDATE episodes SET segments=?, segments_done=? WHERE id=?`, len(segs), countSegments(segDir), id)
 	return nil
 }
@@ -484,6 +520,7 @@ func handleSpeak(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		_ = os.WriteFile(sp, b, 0o644)
+		padSegment(r.Context(), segDir, sp)
 		_, _ = store.db.Exec(`UPDATE episodes SET segments=?, segments_done=MAX(segments_done,?) WHERE id=?`, len(segs), i+1, id)
 		return b, nil
 	}

@@ -81,7 +81,7 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 			COALESCE(p.position_sec,0), COALESCE(p.completed,0), COALESCE(e.kind,''), q.position,
 			EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?)
 			FROM queue q JOIN episodes e ON e.id = q.episode_id JOIN feeds f ON f.id = e.feed_id
-			LEFT JOIN progress p ON p.episode_id = e.id AND p.device_id = q.device_id AND p.user_id=?
+			LEFT JOIN progress p ON p.episode_id = e.id AND p.user_id = ? AND p.rowid = (SELECT p2.rowid FROM progress p2 WHERE p2.episode_id = e.id AND p2.user_id = p.user_id `+progressWinOrder()+` LIMIT 1)
 			WHERE q.device_id = ? AND q.user_id = ? ORDER BY q.position, q.id`, uid, uid, device, uid)
 		if err != nil {
 			writeJSON(w, map[string]any{"error": err.Error()})

@@ -31,7 +31,7 @@ func settingsMap() map[string]string {
 	return map[string]string{
 		"fetch_interval_min":     env("FETCH_INTERVAL_MIN", "45"),
 		"download_concurrency":   env("DOWNLOAD_CONCURRENCY", "2"),
-		"conflict_rule":          env("CONFLICT_RULE", "max"), // max | latest
+		"conflict_rule":          env("CONFLICT_RULE", "latest"), // max | latest
 		"auto_download_new":      env("AUTO_DOWNLOAD_NEW", "0"),
 		"storage_limit_mb":       env("STORAGE_LIMIT_MB", "0"),
 		"ui_theme":               env("UI_THEME", "dark"),
@@ -50,6 +50,7 @@ func settingsMap() map[string]string {
 		"download_dir":           env("DOWNLOAD_DIR", "downloads"),
 		"cache_limit_mb":         env("CACHE_LIMIT_MB", "0"),
 		"download_format":        env("DOWNLOAD_FORMAT", "auto"), // auto | mp3 | m4a
+		"download_tag":           env("DOWNLOAD_TAG", "1"), // 1 = write tags/covers on finish, 0 = keep raw copy
 		"favorite_auto_download": env("FAVORITE_AUTO_DOWNLOAD", "0"),
 		"http_proxy":             env("PROXY_URL", ""),
 	}
@@ -129,7 +130,7 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	dlCount, dlBytes := downloadStats(uid)
 	cacheDir, cFiles, cBytes := cacheInfo()
 	dbSize := int64(0)
-	for _, name := range []string{"podcastman.db", "podcastman.db-wal"} {
+	for _, name := range []string{"lastcast.db", "lastcast.db-wal"} {
 		if st, err := os.Stat(filepath.Join(cfg.DataDir, name)); err == nil {
 			dbSize += st.Size()
 		}
@@ -146,7 +147,7 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 // OPML export
 func handleOpmlExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n<opml version=\"2.0\">\n<head><title>Podcastman</title></head>\n<body>\n"))
+	w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n<opml version=\"2.0\">\n<head><title>Lastcast</title></head>\n<body>\n"))
 	rows, err := store.db.Query(`SELECT COALESCE(title,''),url FROM feeds WHERE user_id=? ORDER BY title`, userID(r))
 	if err != nil {
 		return

@@ -69,7 +69,8 @@ func main() {
 		FetchInterval: time.Duration(atoi(env("FETCH_INTERVAL_MIN", "45"))) * time.Minute,
 	}
 	var err error
-	store, err = openStore(filepath.Join(cfg.DataDir, "podcastman.db"))
+	migrateDBName(cfg.DataDir)
+	store, err = openStore(filepath.Join(cfg.DataDir, "lastcast.db"))
 	if err != nil {
 		fatal(err)
 	}
@@ -143,6 +144,9 @@ func main() {
 	mux.HandleFunc("GET /api/downloads/{id}/file", handleDownloadItem)
 	mux.HandleFunc("DELETE /api/downloads/{id}", handleDownloadItem)
 	mux.HandleFunc("POST /api/downloads/retag", handleRetagDownloads)
+	mux.HandleFunc("POST /api/downloads/progress/{id}", handleDownloadProgressDelete)
+	mux.HandleFunc("GET /api/history", handleHistory)
+	mux.HandleFunc("POST /api/history", handleHistory)
 	mux.HandleFunc("GET /api/favorites", handleFavorites)
 	mux.HandleFunc("POST /api/favorites", handleFavorites)
 	mux.HandleFunc("DELETE /api/favorites/{id}", handleFavorites)
@@ -173,6 +177,39 @@ func env(k, def string) string {
 func atoi(s string) int {
 	n, _ := strconv.Atoi(s)
 	return n
+}
+
+// migrateDBName renames the pre-1.0 database files to the lastcast name once.
+// The project was called podcastman; existing installs keep their data by
+// renaming podcastman.db(+wal/shm) to lastcast.db on first start of the renamed
+// build. Nothing is copied, so a crash mid-rename leaves the old file intact.
+func migrateDBName(dataDir string) {
+	old := filepath.Join(dataDir, "podcastman.db")
+	nw := filepath.Join(dataDir, "lastcast.db")
+	if _, err := os.Stat(nw); err == nil {
+		return
+	}
+	if _, err := os.Stat(old); err != nil {
+		return
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		src := old + suffix
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		_ = os.Rename(src, nw+suffix)
+	}
+}
+
+// progressWinOrder picks which device row represents the user when several
+// progress rows exist for the same episode: by furthest position (rule=max)
+// or by most recent write (rule=latest, default). Joining on rowid keeps the
+// account view single-valued even when two rows share the same timestamp.
+func progressWinOrder() string {
+	if store.getSetting("conflict_rule", "latest") == "max" {
+		return "ORDER BY p2.position_sec DESC, p2.updated_at DESC"
+	}
+	return "ORDER BY p2.updated_at DESC, p2.position_sec DESC"
 }
 
 func nowUnix() int64 { return time.Now().Unix() }
@@ -649,6 +686,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"error": "episode not found"})
 		return
 	}
+	dl.setProgress(userID(r), id, 0, 0, "queued")
 	dl.Enqueue(id)
 	writeJSON(w, map[string]any{"queued": true, "episode_id": id})
 }
@@ -742,7 +780,6 @@ func handleGetProgress(w http.ResponseWriter, r *http.Request) {
 
 func handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
-	dev := r.URL.Query().Get("device_id")
 	var e EpisodeJSON
 	var ft, body, video, desc, file, cover sql.NullString
 	var pos, comp, segIdx int64
@@ -753,7 +790,8 @@ func handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 		EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?), COALESCE(e.added_at,0), COALESCE(e.updated_at,0),
 		COALESCE(e.link,''), COALESCE(e.full_text,''), COALESCE(e.images,'')
 		FROM episodes e JOIN feeds f ON f.id=e.feed_id
-		LEFT JOIN progress p ON p.episode_id=e.id AND p.device_id=? AND p.user_id=? WHERE e.id=? AND f.user_id=?`, uid, dev, uid, id, uid).
+		LEFT JOIN progress p ON p.episode_id=e.id AND p.user_id=? AND p.rowid = (SELECT p2.rowid FROM progress p2 WHERE p2.episode_id=e.id AND p2.user_id=p.user_id `+progressWinOrder()+` LIMIT 1)
+		WHERE e.id=? AND f.user_id=?`, uid, uid, id, uid).
 		Scan(&e.ID, &e.FeedID, &ft, &e.Guid, &e.Title, &e.Kind, &body, &video, &desc, &e.EnclosureURL,
 			&e.PublishedAt, &e.DurationSec, &e.Status, &file, &pos, &comp, &segIdx, &cover, &e.Segments, &e.SegmentsDone, &fav, &e.AddedAt, &e.FeedUpdatedAt,
 			&link, &fullText, &imagesJSON)
@@ -816,10 +854,10 @@ func handleSync(w http.ResponseWriter, r *http.Request) {
 		EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?),
 		COALESCE(e.added_at,0), COALESCE(e.updated_at,0)
 		FROM episodes e JOIN feeds f ON f.id=e.feed_id
-		LEFT JOIN progress p ON p.episode_id=e.id AND p.user_id=? AND p.device_id=?
+		LEFT JOIN progress p ON p.episode_id=e.id AND p.user_id=? AND p.rowid = (SELECT p2.rowid FROM progress p2 WHERE p2.episode_id=e.id AND p2.user_id=p.user_id `+progressWinOrder()+` LIMIT 1)
 		WHERE f.user_id=? AND (? = 0 OR e.feed_id = ?)
 		ORDER BY (e.published_at IS NULL OR e.published_at = 0), e.published_at DESC, e.added_at DESC, e.id DESC
-		LIMIT ? OFFSET ?`, uid, uid, dev, uid, feedFilter, feedFilter, limit, offset)
+		LIMIT ? OFFSET ?`, uid, uid, uid, feedFilter, feedFilter, limit, offset)
 	if err != nil {
 		fatal(err)
 	}

@@ -96,6 +96,22 @@ CREATE INDEX IF NOT EXISTS idx_progress_user_ep_dev ON progress(user_id, episode
 CREATE INDEX IF NOT EXISTS idx_favorites_user_ep ON favorites(user_id, episode_id);
 CREATE INDEX IF NOT EXISTS idx_queue_user_dev ON queue(user_id, device_id, position);
 CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id);
+CREATE TABLE IF NOT EXISTS dl_progress(
+  episode_id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'queued',
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS history(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  episode_id INTEGER NOT NULL,
+  played_at INTEGER NOT NULL,
+  UNIQUE(user_id, episode_id)
+);
+CREATE INDEX IF NOT EXISTS idx_history_user_played ON history(user_id, played_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feeds_user ON feeds(user_id);`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err

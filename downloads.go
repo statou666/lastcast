@@ -127,14 +127,45 @@ func downloadStats(uid int64) (count int, bytes int64) {
 	return
 }
 
-// handleDownloads: GET /api/downloads lists the download manager.
+// handleDownloads: GET /api/downloads lists the download manager plus active jobs.
 func handleDownloads(w http.ResponseWriter, r *http.Request) {
-	list, err := listDownloads(userID(r))
+	uid := userID(r)
+	list, err := listDownloads(uid)
 	if err != nil {
 		writeJSON(w, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, list)
+	rows, err := store.db.Query(`SELECT p.episode_id, COALESCE(e.title,''), COALESCE(p.bytes,0),
+		COALESCE(p.total,0), p.status, p.updated_at
+		FROM dl_progress p LEFT JOIN episodes e ON e.id=p.episode_id
+		WHERE p.user_id=? ORDER BY p.updated_at DESC LIMIT 100`, uid)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	prog := []map[string]any{}
+	for rows.Next() {
+		var id, byts, tot, ts int64
+		var title, status string
+		if err := rows.Scan(&id, &title, &byts, &tot, &status, &ts); err != nil {
+			continue
+		}
+		prog = append(prog, map[string]any{"episode_id": id, "title": title, "bytes": byts,
+			"total": tot, "status": status, "updated_at": ts})
+	}
+	writeJSON(w, map[string]any{"downloads": list, "progress": prog})
+}
+
+// handleDownloadProgressDelete drops an active-job row (used to dismiss errored jobs).
+func handleDownloadProgressDelete(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	if id <= 0 {
+		writeJSON(w, map[string]any{"error": "bad episode_id"})
+		return
+	}
+	_, _ = store.db.Exec(`DELETE FROM dl_progress WHERE episode_id=? AND user_id=?`, id, userID(r))
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // handleDownloadItem: DELETE /api/downloads/{id} removes file + record;
@@ -147,13 +178,15 @@ func handleDownloadItem(w http.ResponseWriter, r *http.Request) {
 	}
 	uid := userID(r)
 	var path, title string
-	if err := store.db.QueryRow(`SELECT path, COALESCE(title,'') FROM downloads WHERE id=? AND user_id=?`, id, uid).Scan(&path, &title); err != nil {
+	var epid int64
+	if err := store.db.QueryRow(`SELECT path, COALESCE(title,''), COALESCE(episode_id,0) FROM downloads WHERE id=? AND user_id=?`, id, uid).Scan(&path, &title, &epid); err != nil {
 		writeJSONStatus(w, http.StatusNotFound, map[string]any{"error": "not found"})
 		return
 	}
 	if r.Method == http.MethodDelete {
 		_ = os.Remove(path)
 		_, _ = store.db.Exec(`DELETE FROM downloads WHERE id=?`, id)
+		_, _ = store.db.Exec(`DELETE FROM dl_progress WHERE episode_id=? AND user_id=?`, epid, uid)
 		_, _ = store.db.Exec(`UPDATE episodes SET file_path='', status=CASE WHEN COALESCE(segments,0)>0 THEN status ELSE 'new' END WHERE file_path=?`, path)
 		store.logEvent("download", itoa(int64(id)), "deleted", uid)
 		writeJSON(w, map[string]any{"ok": true, "deleted": id})
@@ -476,7 +509,7 @@ func ensureCover(ctx context.Context, url string) string {
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("User-Agent", uaPodcastman)
+	req.Header.Set("User-Agent", uaLastcast)
 	req.Header.Set("Referer", refererFor(url))
 	resp, err := streamClient.Do(req)
 	if err != nil {
@@ -617,7 +650,7 @@ func finishDownload(ctx context.Context, id int64, raw string) (string, error) {
 		attempts = append(attempts, attempt{"mp3", cover, ".mp3"}, attempt{"mp3", "", ".mp3"})
 	}
 	var finalPath, lastErr string
-	if _, err := exec.LookPath(ffmpegPath()); err == nil {
+	if _, err := exec.LookPath(ffmpegPath()); err == nil && store.getSetting("download_tag", "1") == "1" {
 		for _, a := range attempts {
 			tmp := rawPathFor(id, a.ext) + ".out.part"
 			_ = os.MkdirAll(filepath.Dir(tmp), 0o755)
@@ -684,6 +717,7 @@ func finishDownload(ctx context.Context, id int64, raw string) (string, error) {
 	if err := registerDownload(id); err != nil {
 		return finalPath, err
 	}
+	_, _ = store.db.Exec(`DELETE FROM dl_progress WHERE episode_id=?`, id)
 	return finalPath, nil
 }
 

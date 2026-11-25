@@ -161,7 +161,7 @@ func peerTubeFile(ctx context.Context, page string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	req.Header.Set("User-Agent", uaPodcastman)
+	req.Header.Set("User-Agent", uaLastcast)
 	req.Header.Set("Accept", "application/json")
 	resp, err := streamClient.Do(req)
 	if err != nil {
@@ -287,7 +287,7 @@ func biliURLWorks(ctx context.Context, u string) bool {
 	if err != nil {
 		return false
 	}
-	req.Header.Set("User-Agent", uaPodcastman)
+	req.Header.Set("User-Agent", uaLastcast)
 	req.Header.Set("Referer", "https://www.bilibili.com/")
 	req.Header.Set("Range", "bytes=0-1023")
 	resp, err := streamClient.Do(req)

@@ -315,7 +315,7 @@ func fetchFeed(client *http.Client, url, etag string) (meta FeedMeta, items []Fe
 	if err != nil {
 		return meta, items, "", false, err
 	}
-	req.Header.Set("User-Agent", "podcastman/1.0 (self-hosted podcast manager)")
+	req.Header.Set("User-Agent", "lastcast/1.0 (self-hosted podcast manager)")
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}

@@ -82,7 +82,7 @@ func urlPath(u string) string {
 // biliHeaders is the header block ffmpeg needs too: the CDN rejects ffmpeg's
 // default UA with 403 even though the signed URL is signed.
 func biliHeaders() string {
-	return "User-Agent: Mozilla/5.0 (X11; Linux x86_64) podcastman\r\nReferer: https://www.bilibili.com/"
+	return "User-Agent: Mozilla/5.0 (X11; Linux x86_64) lastcast\r\nReferer: https://www.bilibili.com/"
 }
 
 // httpHeaders is the header block ffmpeg needs for an arbitrary media URL: a browser
@@ -92,7 +92,7 @@ func httpHeaders(u string) string {
 	if i := strings.Index(u, "://"); i > 0 {
 		rest := u[i+3:]
 		if j := strings.IndexAny(rest, "/?"); j > 0 {
-			ref = "User-Agent: Mozilla/5.0 (X11; Linux x86_64) podcastman\r\nReferer: " + u[:i+3+j] + "/"
+			ref = "User-Agent: Mozilla/5.0 (X11; Linux x86_64) lastcast\r\nReferer: " + u[:i+3+j] + "/"
 		}
 	}
 	return ref
@@ -129,7 +129,7 @@ func biliGet(ctx context.Context, u string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) podcastman")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) lastcast")
 	req.Header.Set("Referer", "https://www.bilibili.com/")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {

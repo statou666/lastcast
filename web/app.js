@@ -1,7 +1,11 @@
 const DICT = {
   en: {
     nav_updates: "Updates", nav_feeds: "Subscriptions", nav_playlist: "Playlist", nav_favorites: "Favorites",
-    nav_downloads: "Downloads", nav_settings: "Settings",
+    nav_downloads: "Downloads", nav_settings: "Settings", nav_history: "History",
+    history_title: "History", history_empty: "Nothing played yet — only episodes you actually play appear here.",
+    dl_active: "In progress",
+    st_queued: "queued", st_downloading: "downloading", st_rendering: "rendering", st_encoding: "encoding", st_error: "error",
+    download_tag: "Write tags + cover on download (title, artist, date, description)",
     playlist_title: "Playlist", playlist_playall: "Play all", playlist_shuffle: "Shuffle", playlist_clear: "Clear",
     card_account: "Account", account_name: "Signed in as", logout: "Sign out", card_users: "Users", role_label: "Role",
     old_password: "Current password", new_password: "New password", change_password: "Change password",
@@ -49,7 +53,11 @@ const DICT = {
   },
   zh: {
     nav_updates: "更新", nav_feeds: "订阅", nav_playlist: "播放列表", nav_favorites: "收藏",
-    nav_downloads: "下载", nav_settings: "设置",
+    nav_downloads: "下载", nav_settings: "设置", nav_history: "最近播放",
+    history_title: "最近播放", history_empty: "还没有记录——只有真正播放过的条目才会出现。",
+    dl_active: "进行中",
+    st_queued: "排队中", st_downloading: "下载中", st_rendering: "渲染中", st_encoding: "编码中", st_error: "出错",
+    download_tag: "下载时写入标签和封面（标题、作者、日期、描述）",
     playlist_title: "播放列表", playlist_playall: "播放全部", playlist_shuffle: "随机", playlist_clear: "清空",
     card_account: "账户", account_name: "当前登录", logout: "退出登录", card_users: "用户", role_label: "角色",
     old_password: "当前密码", new_password: "新密码", change_password: "修改密码",
@@ -188,6 +196,7 @@ function applyLang() {
 
 let pendingSeek = 0;
 let playToken = 0;
+let lastPlayedFor = 0;
 
 function saveLastEpisode() {
   if (!current || !current.id) return;
@@ -222,6 +231,7 @@ function setBar(ep) {
     // previous one's position.
     try { audio.pause(); } catch (e) {}
     try { audio.removeAttribute("src"); audio.load(); } catch (e) {}
+    dropBlobs(prev, 0);
     pendingSeek = 0;
     segIdx = 0;
     segTotal = 0;
@@ -294,6 +304,56 @@ async function waitSegment(n) {
   return false;
 }
 
+function recordPlay() {
+  if (!current || !current.id || lastPlayedFor === current.id) return;
+  lastPlayedFor = current.id;
+  fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ episode_id: current.id }) }).catch(() => {});
+}
+
+// Segment blobs: while segment n plays, segment n+1 is rendered and fetched into
+// memory, so advancing is instant (no load gap between paragraphs). Exactly one
+// segment ahead is kept — never more.
+const segBlobs = {};
+const blobKey = (id, n) => id + ":" + n;
+function dropBlobs(id, keepFrom) {
+  for (const k in segBlobs) {
+    const parts = k.split(":");
+    if (parts[0] === String(id) && Number(parts[1]) < keepFrom) {
+      URL.revokeObjectURL(segBlobs[k]);
+      delete segBlobs[k];
+    }
+  }
+}
+async function prefetchSeg(id, n) {
+  if (!segTotal || n > segTotal) return;
+  const key = blobKey(id, n);
+  if (segBlobs[key]) return;
+  api("/api/episodes/" + id + "/segments", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ segment: n }),
+  }).catch(() => {});
+  for (let i = 0; i < 90; i++) {
+    if (!current || current.id !== id) return;
+    const r = await segmentInfo(id);
+    if (r) {
+      segTotal = r.segments || segTotal;
+      if ((r.ready || []).indexOf(n) >= 0) {
+        try {
+          const resp = await fetch("/media/" + id + "/" + n);
+          if (resp.ok) {
+            const b = await resp.blob();
+            if (current && current.id === id) {
+              segBlobs[key] = URL.createObjectURL(b);
+              dropBlobs(id, n - 1);
+            }
+          }
+        } catch (e) { /* prefetch again on the next advance */ }
+        return;
+      }
+    }
+    await new Promise((res) => setTimeout(res, 400));
+  }
+}
 async function play() {
   if (!current) return;
   const token = playToken;
@@ -341,15 +401,10 @@ async function play() {
   audio.play().catch(() => {});
   // Prefetch the next paragraph in the background so advancing is instant.
   if (segEp(current)) {
-    const next = (segIdx || 1) + 1;
-    if (!segTotal || next <= segTotal) {
-      api("/api/episodes/" + current.id + "/segments", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ segment: next }),
-      }).catch(() => {});
-    }
+    prefetchSeg(current.id, (segIdx || 1) + 1);
   }
   playBtn.textContent = t("pause");
+  recordPlay();
   if ("mediaSession" in navigator) {
     navigator.mediaSession.setActionHandler("play", play);
     navigator.mediaSession.setActionHandler("pause", () => audio.pause());
@@ -431,11 +486,21 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 audio.addEventListener("ended", async () => {
   if (current && segEp(current) && segTotal && segIdx < segTotal) {
     const next = segIdx + 1;
+    const url = segBlobs[blobKey(current.id, next)];
+    if (url) {
+      segIdx = next;
+      audio.src = url;
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      renderBar();
+      prefetchSeg(current.id, next + 1);
+      return;
+    }
     api("/api/episodes/" + current.id + "/segments", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ segment: next }),
     }).catch(() => {});
-    if (await waitSegment(next)) { segIdx = next; audio.src = new URL(source(current), location.origin).href; audio.currentTime = 0; audio.play().catch(() => {}); renderBar(); return; }
+    if (await waitSegment(next)) { segIdx = next; audio.src = new URL(source(current), location.origin).href; audio.currentTime = 0; audio.play().catch(() => {}); renderBar(); prefetchSeg(current.id, next + 1); return; }
     playBtn.textContent = t("play");
     return;
   }
@@ -574,6 +639,7 @@ function show(view, id) {
   else if (view === "playlist") renderPlaylist();
   else if (view === "favorites") renderFavorites();
   else if (view === "downloads") renderDownloads();
+  else if (view === "history") renderHistory();
   else if (view === "settings") { renderSettings(); renderGpodder(); }
   else if (view === "feed") renderFeedDetail(id);
   else if (view === "episode") renderEpisodeDetail(id);
@@ -582,6 +648,23 @@ window.addEventListener("hashchange", () => {
   const parts = (location.hash || "#/updates").slice(2).split("/");
   show(parts[0], parts[1]);
 });
+// Poll the downloads view while visible so active jobs progress.
+setInterval(() => {
+  if (route().view === "downloads" && document.visibilityState === "visible") renderDownloads();
+}, 5000);
+
+/* ---------- history view (played episodes only; opening a page does not count) ---------- */
+async function renderHistory() {
+  const r = await api("/api/history");
+  const box = document.getElementById("history");
+  if (!box) return;
+  lastEps = (Array.isArray(r) ? r : []).map((h) => ({
+    id: h.episode_id, title: h.title, feed_title: h.feed_title, cover_url: h.cover_url,
+    status: "downloaded", duration_sec: 0, position: 0,
+    published_at: h.played_at, added_at: 0, description: "",
+  }));
+  box.innerHTML = lastEps.map(rowHtml).join("") || `<p class="mut">${t("history_empty")}</p>`;
+}
 
 /* ---------- updates view ---------- */
 let filterFeed = "", filterStatus = "all", lastEps = [];
@@ -732,21 +815,35 @@ async function renderFavorites() {
   box.innerHTML = lastEps.map(rowHtml).join("") || `<p class="mut">${t("fav_empty")}</p>`;
 }
 
-/* ---------- downloads view (independent of subscriptions) ---------- */
+/* ---------- downloads view (finished files + active jobs) ---------- */
 async function renderDownloads() {
-  const list = await api("/api/downloads");
+  const r = await api("/api/downloads");
   const box = document.getElementById("downloads");
   if (!box) return;
-  lastDl = Array.isArray(list) ? list : [];
-  box.innerHTML = lastDl.map((d) => `<li class="ep${selectMode ? " has-pick" : ""}" data-id="${d.id}">
+  lastDl = (r && r.downloads) || [];
+  const prog = (r && r.progress) || [];
+  const active = prog.length ? `<h3 class="cathead">${t("dl_active")} <span class="mut">${prog.length}</span></h3>` + prog.map((p) => {
+    const pct = p.total > 0 ? Math.min(100, Math.round((p.bytes / p.total) * 100)) : 0;
+    const meta = p.status === "rendering" ? `${p.bytes}/${p.total} ${t("segments")}`
+      : `${fmtBytes(p.bytes || 0)}${p.total ? " / " + fmtBytes(p.total) : ""}`;
+    return `<li class="ep" data-id="${p.episode_id}">
+      <span class="cover ph">⤓</span>
+      <div class="t"><div class="title"><a href="#/episode/${p.episode_id}">${esc(p.title)}</a></div>
+        <div class="sub">${t("st_" + p.status) || p.status} · ${meta}</div>
+        <div class="bar"><i style="width:${pct}%"></i></div></div>
+      <div class="actions">${p.status === "error" ? `<button data-act="dlprogdel" data-id="${p.episode_id}" title="${t("dl_del")}">✕</button>` : ""}</div>
+    </li>`;
+  }).join("") : "";
+  const done = lastDl.map((d) => `<li class="ep${selectMode ? " has-pick" : ""}" data-id="${d.id}">
       ${pickBox(d.id)}
       <span class="cover ph">⤓</span>
-      <div class="t"><div class="title">${esc(d.title || d.path)}</div>
+      <div class="t"><div class="title"><a href="#/episode/${d.episode_id}">${esc(d.title || d.path)}</a></div>
         <div class="sub">${[esc(d.feed_title || ""), fmtBytes(d.bytes || 0), d.duration_sec ? fmtTime(d.duration_sec) : "", d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""].filter(Boolean).join(" · ")}</div></div>
       <div class="actions">
         <button data-act="dlplay" data-id="${d.id}" title="${t("dl_play")}">▶</button>
         <button data-act="dldel" data-id="${d.id}" title="${t("dl_del")}">✕</button>
-      </div></li>`).join("") || `<p class="mut">${t("dl_empty")}</p>`;
+      </div></li>`).join("");
+  box.innerHTML = active + done || `<p class="mut">${t("dl_empty")}</p>`;
 }
 
 /* ---------- settings view ---------- */
@@ -856,6 +953,7 @@ async function renderSettings() {
   document.getElementById("s-fetch").value = s.fetch_interval_min;
   document.getElementById("s-conc").value = s.download_concurrency;
   document.getElementById("s-rule").value = s.conflict_rule;
+  document.getElementById("s-tag").value = s.download_tag || "1";
   document.getElementById("s-auto").checked = s.auto_download_new === "1";
   document.getElementById("s-limit").value = s.storage_limit_mb;
   document.getElementById("s-theme").value = s.ui_theme;
@@ -1082,8 +1180,8 @@ document.addEventListener("click", async (ev) => {
   if (act === "plup" || act === "pldown") { await api("/api/queue/" + id + "/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device_id: DEVICE, dir: act === "plup" ? "up" : "down" }) }); renderPlaylist(); return; }
   if (act === "pldel") { await api("/api/queue/" + id + "?device_id=" + encodeURIComponent(DEVICE), { method: "DELETE" }); renderPlaylist(); return; }
   if (act === "dlplay") {
-    const list = await api("/api/downloads");
-    const d = (Array.isArray(list) ? list : []).find((x) => x.id === id);
+    const r = await api("/api/downloads");
+    const d = ((r && r.downloads) || []).find((x) => x.id === id);
     if (d) {
       setBar({ id: d.episode_id || 0, title: d.title, feed_title: d.feed_title, cover_url: "", kind: "audio", dl_file: "/api/downloads/" + d.id + "/file", duration_sec: d.duration_sec, position: 0 });
       play();
@@ -1091,6 +1189,7 @@ document.addEventListener("click", async (ev) => {
     return;
   }
   if (act === "dldel") { await api("/api/downloads/" + id, { method: "DELETE" }); refreshView(); return; }
+  if (act === "dlprogdel") { await api("/api/downloads/progress/" + id, { method: "POST" }); renderDownloads(); return; }
   if (act === "play") { if (ep) { setBar(ep); play(); } return; }
   if (act === "fulltext") {
     flash("…");
@@ -1167,6 +1266,7 @@ document.getElementById("s-save").addEventListener("click", async () => {
     fetch_interval_min: document.getElementById("s-fetch").value,
     download_concurrency: document.getElementById("s-conc").value,
     conflict_rule: document.getElementById("s-rule").value,
+    download_tag: document.getElementById("s-tag").value,
     auto_download_new: document.getElementById("s-auto").checked ? "1" : "0",
     storage_limit_mb: document.getElementById("s-limit").value,
     ui_theme: document.getElementById("s-theme").value,

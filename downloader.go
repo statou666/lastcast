@@ -49,6 +49,7 @@ func (d *Downloader) Run(ctx context.Context) {
 				case id := <-d.queue:
 					if err := d.download(ctx, id); err != nil {
 						_, _ = d.store.db.Exec(`UPDATE episodes SET status='error' WHERE id=?`, id)
+						d.setProgressStatus(id, "error")
 						d.store.logEvent("episode", itoa(id), "download_error: "+err.Error())
 					}
 					evictCache()
@@ -60,6 +61,32 @@ func (d *Downloader) Run(ctx context.Context) {
 
 // overLimit enforces storage_limit_mb across the persistent downloads root and the
 // disposable cache root (0 = unlimited).
+// setProgress upserts the active-download row for the downloads page. Finished
+// jobs clear it; errors keep the last known bytes/total with status 'error'.
+func (d *Downloader) setProgress(uid, id, bytes, total int64, status string) {
+	_, _ = store.db.Exec(`INSERT INTO dl_progress(episode_id,user_id,bytes,total,status,updated_at)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(episode_id) DO UPDATE SET user_id=excluded.user_id, bytes=excluded.bytes,
+		total=excluded.total, status=excluded.status, updated_at=excluded.updated_at`,
+		id, uid, bytes, total, status, nowUnix())
+}
+
+func (d *Downloader) setProgressStatus(id int64, status string) {
+	var uid int64
+	_ = store.db.QueryRow(`SELECT COALESCE(f.user_id,0) FROM episodes e JOIN feeds f ON f.id=e.feed_id WHERE e.id=?`, id).Scan(&uid)
+	_, _ = store.db.Exec(`INSERT INTO dl_progress(episode_id,user_id,bytes,total,status,updated_at)
+		VALUES(?,?,0,0,?,?)
+		ON CONFLICT(episode_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`,
+		id, uid, status, nowUnix())
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func (d *Downloader) overLimit() bool {
 	limit := atoi(store.getSetting("storage_limit_mb", "0"))
 	if limit <= 0 {
@@ -111,9 +138,10 @@ func slug(s string) string {
 
 func (d *Downloader) download(ctx context.Context, id int64) error {
 	var feedTitle, url, ctype, guid, kind, desc, existing string
-	err := d.store.db.QueryRow(`SELECT e.id, f.title, e.enclosure_url, COALESCE(e.enclosure_type,''), e.guid, e.kind, COALESCE(e.description,''), COALESCE(e.file_path,'')
+	var uid int64
+	err := d.store.db.QueryRow(`SELECT e.id, COALESCE(f.title,''), e.enclosure_url, COALESCE(e.enclosure_type,''), e.guid, e.kind, COALESCE(e.description,''), COALESCE(e.file_path,''), COALESCE(f.user_id,0)
 		FROM episodes e JOIN feeds f ON f.id=e.feed_id WHERE e.id=?`, id).
-		Scan(new(int64), &feedTitle, &url, &ctype, &guid, &kind, &desc, &existing)
+		Scan(new(int64), &feedTitle, &url, &ctype, &guid, &kind, &desc, &existing, &uid)
 	if err == sql.ErrNoRows {
 		return err
 	}
@@ -125,9 +153,10 @@ func (d *Downloader) download(ctx context.Context, id int64) error {
 			return nil // already downloaded
 		}
 	}
+	d.setProgress(uid, id, 0, 0, "queued")
 	// text-only items have no media file: render them through the configured TTS endpoint
 	if kind == "text" {
-		return d.synthesize(ctx, id)
+		return d.synthesize(ctx, uid, id)
 	}
 	if d.overLimit() {
 		return fmt.Errorf("storage limit reached")
@@ -155,9 +184,9 @@ func (d *Downloader) download(ctx context.Context, id int64) error {
 		if len(urls) == 0 {
 			return fmt.Errorf("no audio source for this item")
 		}
-		return d.downloadVideo(ctx, id, urls, ctype)
+		return d.downloadVideo(ctx, uid, id, urls, ctype)
 	}
-	return d.downloadFile(ctx, id, url, ctype)
+	return d.downloadFile(ctx, uid, id, url, ctype)
 }
 
 // rawExt picks the scratch container for a remote source: it follows the source
@@ -184,7 +213,7 @@ func rawExt(srcURL, ctype string) string {
 // audio track. Fetching first (chunked Range with retries) is deliberate: some
 // CDNs (bilibili's mcdn edge nodes) answer small range probes instantly but stall
 // or truncate a long sequential read, which makes ffmpeg give up mid-file.
-func (d *Downloader) downloadVideo(ctx context.Context, id int64, urls []string, ctype string) error {
+func (d *Downloader) downloadVideo(ctx context.Context, uid, id int64, urls []string, ctype string) error {
 	media := filepath.Join(cacheRoot(), "tmp", itoa(id)+".src")
 	if err := os.MkdirAll(filepath.Dir(media), 0o755); err != nil {
 		return err
@@ -196,7 +225,7 @@ func (d *Downloader) downloadVideo(ctx context.Context, id int64, urls []string,
 			break
 		}
 		_ = os.Remove(media)
-		if err := d.fetchMedia(ctx, u, media); err != nil {
+		if err := d.fetchMedia(ctx, uid, id, u, media); err != nil {
 			lastErr = err
 			continue
 		}
@@ -207,6 +236,9 @@ func (d *Downloader) downloadVideo(ctx context.Context, id int64, urls []string,
 	}
 	if lastErr != nil {
 		return lastErr
+	}
+	if st, e := os.Stat(media); e == nil && st.Size() > 0 {
+		d.setProgress(uid, id, st.Size(), st.Size(), "encoding")
 	}
 	ext := rawExt(urls[0], ctype)
 	raw := rawPathFor(id, ext)
@@ -269,12 +301,13 @@ func (d *Downloader) extractAudio(ctx context.Context, media, raw, ext string) e
 
 // fetchMedia downloads a remote file into dst using 4 MB Range requests, resuming
 // from a previous .part and retrying each chunk. Partial bytes are never lost.
-func (d *Downloader) fetchMedia(ctx context.Context, url, dst string) error {
+func (d *Downloader) fetchMedia(ctx context.Context, uid, id int64, url, dst string) error {
 	part := dst + ".part"
 	var off int64
 	if st, err := os.Stat(part); err == nil {
 		off = st.Size()
 	}
+	d.setProgress(uid, id, off, 0, "downloading")
 	f, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -295,6 +328,11 @@ func (d *Downloader) fetchMedia(ctx context.Context, url, dst string) error {
 			total = tot
 		}
 		off += n
+		knownTotal := total
+		if knownTotal < 0 {
+			knownTotal = 0
+		}
+		d.setProgress(uid, id, off, knownTotal, "downloading")
 		if err != nil {
 			f.Close()
 			return err
@@ -320,7 +358,7 @@ func (d *Downloader) fetchRange(ctx context.Context, url string, f *os.File, off
 		if e != nil {
 			return 0, 0, false, e
 		}
-		req.Header.Set("User-Agent", uaPodcastman)
+		req.Header.Set("User-Agent", uaLastcast)
 		req.Header.Set("Referer", refererFor(url))
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, off+size-1))
 		rctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -377,7 +415,7 @@ func (d *Downloader) fetchRange(ctx context.Context, url string, f *os.File, off
 }
 
 // downloadFile copies a plain audio enclosure into a raw scratch file with resume.
-func (d *Downloader) downloadFile(ctx context.Context, id int64, url, ctype string) error {
+func (d *Downloader) downloadFile(ctx context.Context, uid, id int64, url, ctype string) error {
 	ext := extFor(ctype, url)
 	raw := rawPathFor(id, ext)
 	if err := os.MkdirAll(filepath.Dir(raw), 0o755); err != nil {
@@ -394,11 +432,12 @@ func (d *Downloader) downloadFile(ctx context.Context, id int64, url, ctype stri
 	if st, err := os.Stat(part); err == nil {
 		size = st.Size()
 	}
+	d.setProgress(uid, id, size, 0, "downloading")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", uaPodcastman)
+	req.Header.Set("User-Agent", uaLastcast)
 	req.Header.Set("Referer", refererFor(url))
 	if size > 0 {
 		req.Header.Set("Range", "bytes="+itoa(size)+"-")
@@ -412,6 +451,13 @@ func (d *Downloader) downloadFile(ctx context.Context, id int64, url, ctype stri
 		return &feedError{status: resp.StatusCode}
 	}
 	appending := resp.StatusCode == http.StatusPartialContent && size > 0
+	total := resp.ContentLength
+	if total < 0 {
+		total = size
+	}
+	if total > 0 {
+		d.setProgress(uid, id, size, total, "downloading")
+	}
 	flags := os.O_CREATE | os.O_WRONLY
 	if appending {
 		flags |= os.O_APPEND
@@ -423,10 +469,12 @@ func (d *Downloader) downloadFile(ctx context.Context, id int64, url, ctype stri
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	copied, cerr := io.Copy(f, resp.Body)
+	if cerr != nil {
 		f.Close()
-		return err
+		return cerr
 	}
+	d.setProgress(uid, id, size+copied, max64(total, size+copied), "downloading")
 	f.Close()
 	if err := os.Rename(part, raw); err != nil {
 		return err

@@ -20,7 +20,7 @@ import (
 // pass-through, so a video episode starts playing immediately, can be seeked at
 // once, and costs zero disk. ffmpeg is only needed for downloads and for
 // containers the browser cannot demux (those fall back to download-then-play).
-const uaPodcastman = "Mozilla/5.0 (X11; Linux x86_64) podcastman"
+const uaLastcast = "Mozilla/5.0 (X11; Linux x86_64) lastcast"
 
 var streamClient = &http.Client{
 	Timeout: 0, // long media: no overall timeout
@@ -62,7 +62,7 @@ func headPlayable(ctx context.Context, u string) bool {
 	if err != nil {
 		return false
 	}
-	req.Header.Set("User-Agent", uaPodcastman)
+	req.Header.Set("User-Agent", uaLastcast)
 	req.Header.Set("Referer", refererFor(u))
 	req.Header.Set("Range", "bytes=0-4095")
 	resp, err := streamClient.Do(req)
@@ -141,7 +141,7 @@ func sniffType(ctx context.Context, u string) string {
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("User-Agent", uaPodcastman)
+	req.Header.Set("User-Agent", uaLastcast)
 	req.Header.Set("Referer", refererFor(u))
 	resp, err := streamClient.Do(req)
 	if err != nil {
@@ -368,7 +368,7 @@ func proxyMedia(w http.ResponseWriter, r *http.Request, src, ctype string) {
 		writeJSON(w, map[string]any{"error": err.Error()})
 		return
 	}
-	req.Header.Set("User-Agent", uaPodcastman)
+	req.Header.Set("User-Agent", uaLastcast)
 	req.Header.Set("Referer", refererFor(src))
 	if rg := r.Header.Get("Range"); rg != "" {
 		req.Header.Set("Range", rg)
