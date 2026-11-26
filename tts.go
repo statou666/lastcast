@@ -220,7 +220,7 @@ func padSegment(ctx context.Context, segDir, sp string) {
 	sil := filepath.Join(segDir, "_silence.mp3")
 	if st, err := os.Stat(sil); err != nil || st.Size() == 0 {
 		if _, err := exec.CommandContext(ctx, ffmpegPath(), "-hide_banner", "-loglevel", "error", "-y",
-			"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.4",
+			"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.8",
 			"-c:a", "libmp3lame", "-b:a", "64k", sil).CombinedOutput(); err != nil {
 			_ = os.Remove(sil)
 			return

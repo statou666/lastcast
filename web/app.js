@@ -50,6 +50,7 @@ const DICT = {
     tts_test: "Test", tts_render: "Read aloud",
     subscribe_one: "Subscribe one feed", kind_hint: "Type: auto detects it from the feed; choosing text makes every entry speakable.",
     back: "Back", not_found: "Not found", chunks: "chunks", segments: "chunks/segments", segment: "segment", not_ready: "still generating…", open_detail: "Open episode", tts_auto: "Auto-speak new text items",
+    prev_seg: "Prev", next_seg: "Next",
   },
   zh: {
     nav_updates: "更新", nav_feeds: "订阅", nav_playlist: "播放列表", nav_favorites: "收藏",
@@ -101,6 +102,7 @@ const DICT = {
     tts_model: "模型", tts_voice: "音色", tts_speed: "语速", tts_max: "每次请求最大字符数",
     tts_test: "测试", tts_render: "朗读",
     subscribe_one: "订阅单个源", kind_hint: "类型：自动＝从源自动判断；选文字后每条内容都能朗读。", tts_auto: "自动朗读新文字条目",
+    prev_seg: "上一段", next_seg: "下一段",
     back: "返回", not_found: "未找到", chunks: "分段", segments: "分段",
     segment: "段", not_ready: "正在生成，稍后重试", open_detail: "打开本集",
   },
@@ -268,6 +270,10 @@ function renderBar() {
   barFill.style.width = seg ? Math.min(100, (segIdx / segTotal) * 100) + "%" : (dur ? Math.min(100, (pos / dur) * 100) + "%" : "0%");
   barTime.textContent = seg ? `${t("segment")} ${segIdx}/${segTotal} · ${fmtTime(pos)}` : fmtTime(pos);
   barRem.textContent = dur ? "−" + fmtTime(Math.max(0, dur - pos)) : "";
+  const rw = document.getElementById("rewind");
+  const fw = document.getElementById("forward");
+  if (rw) { rw.textContent = seg ? t("prev_seg") : "−30"; rw.title = seg ? t("prev_seg") : "-30s"; }
+  if (fw) { fw.textContent = seg ? t("next_seg") : "+30"; fw.title = seg ? t("next_seg") : "+30s"; }
 }
 
 // Segment mode applies to text renders and to video audio cuts already in cache.
@@ -353,6 +359,42 @@ async function prefetchSeg(id, n) {
     }
     await new Promise((res) => setTimeout(res, 400));
   }
+}
+
+// Jump to the previous/next paragraph segment. Uses the prefetched blob when
+// present (memory load = shortest cold-start, so the lead-in pad covers it);
+// otherwise requests a render and fetches. This is what the −/+ buttons do for
+// text sources, replacing the time-based seek that overshot short paragraphs
+// and triggered the same cold-start clipping as the auto-advance.
+async function jumpSeg(delta) {
+  if (!current || !segEp(current) || !segTotal) return false;
+  const next = segIdx + delta;
+  if (next < 1 || next > segTotal) return false;
+  segIdx = next;
+  const blob = segBlobs[blobKey(current.id, next)];
+  if (blob) {
+    audio.src = blob;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+    renderBar();
+    prefetchSeg(current.id, next + 1);
+    reportProgress({});
+    return true;
+  }
+  api("/api/episodes/" + current.id + "/segments", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ segment: next }),
+  }).catch(() => {});
+  if (await waitSegment(next)) {
+    audio.src = new URL(source(current), location.origin).href;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+    renderBar();
+    prefetchSeg(current.id, next + 1);
+    reportProgress({});
+    return true;
+  }
+  return false;
 }
 async function play() {
   if (!current) return;
@@ -523,8 +565,14 @@ playBtn.addEventListener("click", () => {
   if (audio.paused) play(); else audio.pause();
   playBtn.textContent = audio.paused ? t("play") : t("pause");
 });
-document.getElementById("rewind").addEventListener("click", () => { audio.currentTime = Math.max(0, audio.currentTime - 30); });
-document.getElementById("forward").addEventListener("click", () => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 30); });
+document.getElementById("rewind").addEventListener("click", () => {
+  if (segEp(current)) { jumpSeg(-1); return; }
+  audio.currentTime = Math.max(0, audio.currentTime - 30);
+});
+document.getElementById("forward").addEventListener("click", () => {
+  if (segEp(current)) { jumpSeg(1); return; }
+  audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 30);
+});
 document.getElementById("speed").addEventListener("change", () => { audio.playbackRate = parseFloat(document.getElementById("speed").value) || 1; });
 document.getElementById("sleep").addEventListener("change", sleepTimer);
 document.getElementById("mute").addEventListener("click", () => { audio.muted = !audio.muted; document.getElementById("mute").classList.toggle("active", audio.muted); });

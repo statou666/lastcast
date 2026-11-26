@@ -51,7 +51,7 @@ func segmentDirFor(id int64) string {
 	// pad (the old -p2 files carry a 120ms pad that is too short to cover the
 	// audio element's cold-start latency, which clips the opening syllable after
 	// a pause). Old files are disposable cache and are removed by normal eviction.
-	return filepath.Join(cacheRoot(), feedSlugOf(id), strconv.FormatInt(id, 10)+"-p3")
+	return filepath.Join(cacheRoot(), feedSlugOf(id), strconv.FormatInt(id, 10)+"-p4")
 }
 
 func segmentFileFor(id int64, n int) string {
