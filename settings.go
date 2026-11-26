@@ -50,7 +50,7 @@ func settingsMap() map[string]string {
 		"download_dir":           env("DOWNLOAD_DIR", "downloads"),
 		"cache_limit_mb":         env("CACHE_LIMIT_MB", "0"),
 		"download_format":        env("DOWNLOAD_FORMAT", "auto"), // auto | mp3 | m4a
-		"download_tag":           env("DOWNLOAD_TAG", "1"), // 1 = write tags/covers on finish, 0 = keep raw copy
+		"download_tag":           env("DOWNLOAD_TAG", "1"),       // 1 = write tags/covers on finish, 0 = keep raw copy
 		"favorite_auto_download": env("FAVORITE_AUTO_DOWNLOAD", "0"),
 		"http_proxy":             env("PROXY_URL", ""),
 	}

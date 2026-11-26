@@ -203,10 +203,16 @@ func (c ttsCfg) speak(ctx context.Context, text string) ([]byte, error) {
 	return data, nil
 }
 
-// padSegment prepends a short silence to a rendered segment. TTS endpoints trim
+// padSegment prepends a lead-in silence to a rendered segment. TTS endpoints trim
 // leading silence hard, which clips the first syllable ("swallowed" opening
-// words); a 120ms lead-in keeps the opening audible. ffmpeg-only (full image):
-// the raw provider bytes are kept as-is when ffmpeg is absent.
+// words). When two segments play back-to-back the audio pipeline is already warm
+// and a short lead-in is enough; but after a short paragraph the player pauses to
+// fetch the next segment, the audio element cold-starts, and the startup latency
+// eats a short pad — so the opening syllable of the next segment is clipped. A
+// 400ms lead-in covers the cold-start latency (the pad is consumed by pipeline
+// warm-up, the first syllable stays audible) and reads as a natural paragraph
+// pause when segments are tightly connected. ffmpeg-only (full image): the raw
+// provider bytes are kept as-is when ffmpeg is absent.
 func padSegment(ctx context.Context, segDir, sp string) {
 	if _, err := exec.LookPath(ffmpegPath()); err != nil {
 		return
@@ -214,16 +220,19 @@ func padSegment(ctx context.Context, segDir, sp string) {
 	sil := filepath.Join(segDir, "_silence.mp3")
 	if st, err := os.Stat(sil); err != nil || st.Size() == 0 {
 		if _, err := exec.CommandContext(ctx, ffmpegPath(), "-hide_banner", "-loglevel", "error", "-y",
-			"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.12",
+			"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.4",
 			"-c:a", "libmp3lame", "-b:a", "64k", sil).CombinedOutput(); err != nil {
 			_ = os.Remove(sil)
 			return
 		}
 	}
-	tmp := sp + ".pad"
+	// The temp output must carry a recognized extension (or ffmpeg cannot pick the
+	// muxer and exits with "Provided filename ... does not contain any known
+	// file extension"), which silently disabled the pad on every rendered segment.
+	tmp := sp + ".pad.mp3"
 	if _, err := exec.CommandContext(ctx, ffmpegPath(), "-hide_banner", "-loglevel", "error", "-y",
 		"-i", sil, "-i", sp, "-filter_complex", "[0][1]concat=n=2:v=0:a=1",
-		"-c:a", "libmp3lame", "-b:a", "128k", tmp).CombinedOutput(); err != nil {
+		"-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3", tmp).CombinedOutput(); err != nil {
 		_ = os.Remove(tmp)
 		return
 	}

@@ -56,10 +56,15 @@ func handleHistory(w http.ResponseWriter, r *http.Request) {
 	if limit > historyCap {
 		limit = historyCap
 	}
+	// The real episode status (not a hardcoded "downloaded") plus the account's
+	// progress, so the history view shows the truth: a played-but-not-downloaded
+	// episode shows its actual status, and the progress bar reflects the breakpoint.
 	rows, err := store.db.Query(`SELECT h.played_at, e.id, COALESCE(e.title,''), COALESCE(f.title,''),
-		COALESCE(NULLIF(e.cover_url,''), COALESCE(NULLIF(f.cover_url,''),''))
+		COALESCE(NULLIF(e.cover_url,''), COALESCE(NULLIF(f.cover_url,''),'')),
+		COALESCE(e.status,''), COALESCE(e.duration_sec,0), COALESCE(p.position_sec,0), COALESCE(p.completed,0)
 		FROM history h JOIN episodes e ON e.id=h.episode_id JOIN feeds f ON f.id=e.feed_id
-		WHERE h.user_id=? ORDER BY h.played_at DESC LIMIT ?`, uid, limit)
+		LEFT JOIN progress p ON p.episode_id=e.id AND p.user_id=? AND p.rowid = (SELECT p2.rowid FROM progress p2 WHERE p2.episode_id=e.id AND p2.user_id=p.user_id `+progressWinOrder()+` LIMIT 1)
+		WHERE h.user_id=? ORDER BY h.played_at DESC LIMIT ?`, uid, uid, limit)
 	if err != nil {
 		writeJSON(w, map[string]any{"error": err.Error()})
 		return
@@ -67,13 +72,15 @@ func handleHistory(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var ts, id int64
-		var title, feedTitle, cover string
-		if err := rows.Scan(&ts, &id, &title, &feedTitle, &cover); err != nil {
+		var ts, id, dur, pos int64
+		var title, feedTitle, cover, status string
+		var completed int
+		if err := rows.Scan(&ts, &id, &title, &feedTitle, &cover, &status, &dur, &pos, &completed); err != nil {
 			continue
 		}
 		out = append(out, map[string]any{"episode_id": id, "title": title, "feed_title": feedTitle,
-			"cover_url": cover, "played_at": ts})
+			"cover_url": cover, "played_at": ts, "status": status, "duration_sec": dur,
+			"position": pos, "completed": completed == 1})
 	}
 	writeJSON(w, out)
 }

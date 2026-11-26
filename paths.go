@@ -47,10 +47,11 @@ func feedSlugOf(id int64) string {
 }
 
 func segmentDirFor(id int64) string {
-	// The "p2" suffix invalidates segment caches created before strict paragraph
-	// chunking (indexes no longer mean the same text). Old files are disposable
-	// cache and are removed by the normal cache eviction.
-	return filepath.Join(cacheRoot(), feedSlugOf(id), strconv.FormatInt(id, 10)+"-p2")
+	// The "p3" suffix invalidates segment caches created before the longer lead-in
+	// pad (the old -p2 files carry a 120ms pad that is too short to cover the
+	// audio element's cold-start latency, which clips the opening syllable after
+	// a pause). Old files are disposable cache and are removed by normal eviction.
+	return filepath.Join(cacheRoot(), feedSlugOf(id), strconv.FormatInt(id, 10)+"-p3")
 }
 
 func segmentFileFor(id int64, n int) string {

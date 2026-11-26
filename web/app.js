@@ -504,7 +504,17 @@ audio.addEventListener("ended", async () => {
     playBtn.textContent = t("play");
     return;
   }
-  if (queue.length) { const ep = queue[0]; await api("/api/queue/" + ep.queue_id + "?device_id=" + encodeURIComponent(DEVICE), { method: "DELETE" }); await loadQueue(); setBar(ep); play(); return; }
+  // The episode is fully finished: drop it from the playlist (it is no longer a
+  // pending item), then advance to the next queued episode. This is the "auto
+  // remove after listening" rule; the breakpoint for unfinished items is kept in
+  // progress, so a playlist item resumes where it left off.
+  const finishedId = current && current.id;
+  if (finishedId) {
+    const qe = queue.find((x) => x.id === finishedId);
+    if (qe) { await api("/api/queue/" + qe.queue_id + "?device_id=" + encodeURIComponent(DEVICE), { method: "DELETE" }); }
+    await loadQueue();
+    if (queue.length) { const ep = queue[0]; setBar(ep); play(); return; }
+  }
   playBtn.textContent = t("play");
   if (sleepMode === "end") document.getElementById("sleep").value = "off";
 });
@@ -660,7 +670,8 @@ async function renderHistory() {
   if (!box) return;
   lastEps = (Array.isArray(r) ? r : []).map((h) => ({
     id: h.episode_id, title: h.title, feed_title: h.feed_title, cover_url: h.cover_url,
-    status: "downloaded", duration_sec: 0, position: 0,
+    status: h.status || "", duration_sec: h.duration_sec || 0, position: h.position || 0,
+    completed: !!h.completed,
     published_at: h.played_at, added_at: 0, description: "",
   }));
   box.innerHTML = lastEps.map(rowHtml).join("") || `<p class="mut">${t("history_empty")}</p>`;
@@ -796,7 +807,8 @@ async function renderPlaylist() {
         : `<span class="cover ph"></span>`}<span class="qnum">${i + 1}</span></span>
       <div class="t">
         <a class="title" data-act="openepisode" data-id="${ep.id}" href="#/episode/${ep.id}">${esc(ep.title)}</a>
-        <div class="sub">${[esc(ep.feed_title || ""), fmtDur(ep.duration_sec), ep.completed ? t("chip_done") : ""].filter(Boolean).join(" · ")}</div>
+        <div class="sub">${[esc(ep.feed_title || ""), fmtDur(ep.duration_sec), ep.position ? fmtTime(ep.position) : "", ep.completed ? t("chip_done") : ""].filter(Boolean).join(" · ")}</div>
+        <div class="bar"><i style="width:${ep.duration_sec ? Math.min(100, (ep.position / ep.duration_sec) * 100) : 0}%"></i></div>
       </div>
       <div class="actions">
         <button data-act="plplay" data-id="${ep.queue_id}">▶</button>
@@ -1190,7 +1202,17 @@ document.addEventListener("click", async (ev) => {
   }
   if (act === "dldel") { await api("/api/downloads/" + id, { method: "DELETE" }); refreshView(); return; }
   if (act === "dlprogdel") { await api("/api/downloads/progress/" + id, { method: "POST" }); renderDownloads(); return; }
-  if (act === "play") { if (ep) { setBar(ep); play(); } return; }
+  if (act === "play") {
+    if (ep) {
+      // Clicking play puts this episode at the top of the playlist (next=true →
+      // position = min-1), so the playlist mirrors what is playing, syncs its
+      // progress, and the finished item is removed on "ended".
+      await api("/api/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ episode_id: id, device_id: DEVICE, next: true }) });
+      await loadQueue();
+      setBar(ep); play();
+    }
+    return;
+  }
   if (act === "fulltext") {
     flash("…");
     const r = await api("/api/episodes/" + id + "/fulltext", { method: "POST" });
@@ -1317,22 +1339,43 @@ document.querySelectorAll("[data-lang]").forEach((b) => b.addEventListener("clic
 /* boot */
 applyLang();
 renderAccount();
-const savedEp = JSON.parse(localStorage.getItem("last_episode") || "null");
-if (savedEp) {
-  current = { id: savedEp.id, title: savedEp.title, position: savedEp.position, duration_sec: 0, cover_url: savedEp.cover || "", file: null, enclosure_url: savedEp.url, dl_file: savedEp.dl || "" };
-  setBar(current);
-  current._posLoaded = false;
-  api("/api/episodes/" + savedEp.id + "?device_id=" + encodeURIComponent(DEVICE)).then((ep) => {
-    if (!ep || ep.error || !current || current.id !== ep.id) return;
-    current.position = ep.position || current.position || 0;
-    current.duration_sec = ep.duration_sec || current.duration_sec || 0;
-    current.file = ep.file || null;
-    if (ep.cover_url) current.cover_url = ep.cover_url;
-    current._posLoaded = true;
-    renderBar();
-    saveLastEpisode();
-  }).catch(() => {});
+
+// The player bar must show the account's latest state when the page opens, not
+// this device's last localStorage snapshot: the most recently played episode for
+// the account (history) is the source of truth, and its server-side progress
+// gives the breakpoint. localStorage is only the offline fallback.
+async function bootPlayer() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("last_episode") || "null"); } catch (e) {}
+  let latest = null;
+  try {
+    const h = await api("/api/history?limit=1");
+    if (Array.isArray(h) && h.length) latest = h[0];
+  } catch (e) {}
+  const epId = (latest && latest.episode_id) || (saved && saved.id);
+  if (!epId) return;
+  try {
+    const ep = await api("/api/episodes/" + epId + "?device_id=" + encodeURIComponent(DEVICE));
+    if (ep && !ep.error) {
+      current = { id: ep.id, title: ep.title, feed_title: ep.feed_title, position: ep.position || 0,
+        duration_sec: ep.duration_sec || 0, cover_url: ep.cover_url || "", file: ep.file || null,
+        enclosure_url: ep.enclosure_url, dl_file: ep.dl_file || "", kind: ep.kind,
+        segments: ep.segments || 0, segment_idx: ep.segment_idx || 0, completed: ep.completed };
+      setBar(current);
+      current._posLoaded = true;
+      renderBar();
+      saveLastEpisode();
+      return;
+    }
+  } catch (e) {}
+  if (saved) {
+    current = { id: saved.id, title: saved.title, position: saved.position, duration_sec: 0,
+      cover_url: saved.cover || "", file: null, enclosure_url: saved.url, dl_file: saved.dl || "" };
+    setBar(current);
+    current._posLoaded = false;
+  }
 }
+bootPlayer();
 document.body.dataset.theme = "dark";
 api("/api/settings").then((s) => { document.body.dataset.theme = s.ui_theme || "dark"; });
 const segs = (location.hash || "#/updates").slice(2).split("/");

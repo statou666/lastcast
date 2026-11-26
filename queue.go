@@ -79,6 +79,7 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 			COALESCE(e.file_path,''), COALESCE(e.enclosure_url,''), COALESCE(f.title,''),
 			COALESCE(NULLIF(e.cover_url,''), COALESCE(NULLIF(f.cover_url,''),'')),
 			COALESCE(p.position_sec,0), COALESCE(p.completed,0), COALESCE(e.kind,''), q.position,
+			COALESCE(p.segment_idx,0),
 			EXISTS(SELECT 1 FROM favorites fv WHERE fv.episode_id=e.id AND fv.user_id=?)
 			FROM queue q JOIN episodes e ON e.id = q.episode_id JOIN feeds f ON f.id = e.feed_id
 			LEFT JOIN progress p ON p.episode_id = e.id AND p.user_id = ? AND p.rowid = (SELECT p2.rowid FROM progress p2 WHERE p2.episode_id = e.id AND p2.user_id = p.user_id `+progressWinOrder()+` LIMIT 1)
@@ -94,13 +95,15 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 			var qid, pos, order int64
 			var title, feedTitle, cover, file, enc, kind string
 			var completed, fav int
+			var segIdx int64
 			if err := rows.Scan(&qid, &ep.ID, &title, &ep.DurationSec, &ep.Status, &file, &enc,
-				&feedTitle, &cover, &pos, &completed, &kind, &order, &fav); err != nil {
+				&feedTitle, &cover, &pos, &completed, &kind, &order, &segIdx, &fav); err != nil {
 				continue
 			}
 			ep.QueueID, ep.Title, ep.FeedTitle, ep.CoverURL, ep.File, ep.Position, ep.Completed =
 				qid, title, feedTitle, cover, file, pos, completed == 1
 			ep.Kind, ep.Order, ep.Favorite = kind, int(order), fav == 1
+			ep.SegmentIdx = int(segIdx)
 			out = append(out, ep)
 		}
 		writeJSON(w, out)
