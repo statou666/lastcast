@@ -33,6 +33,10 @@
 
 推荐配合 [RSSHub](https://github.com/DIYgod/RSSHub) 使用：任何 RSSHub 能生成的源（B 站、YouTube、知乎、微博……）都可以直接订阅，能够扩展这个应用的使用范围。
 
+<img width="2262" height="1358" alt="屏幕截图 2026-11-26 213831" src="https://github.com/user-attachments/assets/f378c60c-b42a-475e-9ae2-3d432781d651" />
+
+<img width="2256" height="1352" alt="屏幕截图 2026-11-26 213911" src="https://github.com/user-attachments/assets/d328312e-098c-40c1-9ad5-17aa5b2b986a" />
+
 ---
 
 ## 功能特性
