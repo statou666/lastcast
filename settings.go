@@ -31,7 +31,7 @@ func settingsMap() map[string]string {
 	return map[string]string{
 		"fetch_interval_min":     env("FETCH_INTERVAL_MIN", "45"),
 		"download_concurrency":   env("DOWNLOAD_CONCURRENCY", "2"),
-		"conflict_rule":          env("CONFLICT_RULE", "latest"), // max | latest
+		"conflict_rule":          env("CONFLICT_RULE", "max"), // max | latest
 		"auto_download_new":      env("AUTO_DOWNLOAD_NEW", "0"),
 		"storage_limit_mb":       env("STORAGE_LIMIT_MB", "0"),
 		"ui_theme":               env("UI_THEME", "dark"),

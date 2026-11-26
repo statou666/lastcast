@@ -203,13 +203,19 @@ func migrateDBName(dataDir string) {
 
 // progressWinOrder picks which device row represents the user when several
 // progress rows exist for the same episode: by furthest position (rule=max)
-// or by most recent write (rule=latest, default). Joining on rowid keeps the
-// account view single-valued even when two rows share the same timestamp.
+// or by most recent write (rule=latest). Joining on rowid keeps the account view
+// single-valued even when two rows share the same timestamp.
+//
+// Default is max (furthest progress wins): a device that is idle keeps saving its
+// last-synced position on every pagehide/refresh, which under rule=latest makes its
+// own stale row the newest and masks the device that is actually playing. rule=max
+// makes the account view show the furthest progress across devices, so an idle
+// device's refresh reflects the playing device.
 func progressWinOrder() string {
-	if store.getSetting("conflict_rule", "latest") == "max" {
-		return "ORDER BY p2.position_sec DESC, p2.updated_at DESC"
+	if store.getSetting("conflict_rule", "max") == "latest" {
+		return "ORDER BY p2.updated_at DESC, p2.position_sec DESC"
 	}
-	return "ORDER BY p2.updated_at DESC, p2.position_sec DESC"
+	return "ORDER BY p2.position_sec DESC, p2.updated_at DESC"
 }
 
 func nowUnix() int64 { return time.Now().Unix() }

@@ -37,17 +37,13 @@ func handleBatch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case "queue":
-		device := body.DeviceID
-		if device == "" {
-			device = "web"
-		}
-		max, _ := queuePositions(uid, device)
+		max, _ := queuePositions(uid)
 		for i, id := range body.IDs {
 			if !episodeOwned(uid, id) {
 				continue
 			}
-			if _, err := store.db.Exec(`INSERT OR IGNORE INTO queue(user_id,episode_id,device_id,position,added_at) VALUES(?,?,?,?,?)`,
-				uid, id, device, max+int64(i)+1, nowUnix()); err == nil {
+			if _, err := store.db.Exec(`INSERT OR IGNORE INTO queue(user_id,episode_id,position,added_at) VALUES(?,?,?,?)`,
+				uid, id, max+int64(i)+1, nowUnix()); err == nil {
 				n++
 			}
 		}

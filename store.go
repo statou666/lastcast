@@ -94,7 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_episodes_feed_pub ON episodes(feed_id, published_
 CREATE INDEX IF NOT EXISTS idx_episodes_updated ON episodes(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_progress_user_ep_dev ON progress(user_id, episode_id, device_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_user_ep ON favorites(user_id, episode_id);
-CREATE INDEX IF NOT EXISTS idx_queue_user_dev ON queue(user_id, device_id, position);
+CREATE INDEX IF NOT EXISTS idx_queue_user ON queue(user_id, position);
 CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id);
 CREATE TABLE IF NOT EXISTS dl_progress(
   episode_id INTEGER PRIMARY KEY,

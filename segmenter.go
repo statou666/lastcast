@@ -260,7 +260,11 @@ func (d *Downloader) segmentsViaFFmpeg(ctx context.Context, id int64, url string
 				}
 				return fmt.Errorf("ffmpeg wrote no segments")
 			}
-			_, _ = d.store.db.Exec(`UPDATE episodes SET segments=?, segments_done=?, status='downloaded' WHERE id=?`, n, n, id)
+			// Segments are a disposable playback cache, NOT a download: record
+			// readiness only, never touch the episode's download status. A played
+			// (streamed/segmented) episode must keep its real status so the history
+			// and list views do not show "downloaded" for something never downloaded.
+			_, _ = d.store.db.Exec(`UPDATE episodes SET segments=?, segments_done=? WHERE id=?`, n, n, id)
 			// ffmpeg prints the input duration while it opens the stream: free backfill.
 			if dur := parseFFmpegDuration(stderr.String()); dur > 0 {
 				_, _ = d.store.db.Exec(`UPDATE episodes SET duration_sec=? WHERE id=? AND (duration_sec IS NULL OR duration_sec=0)`, dur, id)
@@ -268,7 +272,7 @@ func (d *Downloader) segmentsViaFFmpeg(ctx context.Context, id int64, url string
 			return nil
 		case <-ticker.C:
 			if n := countSegments(dir); n > 0 {
-				_, _ = d.store.db.Exec(`UPDATE episodes SET segments=?, segments_done=?, status='working' WHERE id=?`, n, n, id)
+				_, _ = d.store.db.Exec(`UPDATE episodes SET segments=?, segments_done=? WHERE id=?`, n, n, id)
 			}
 		case <-ctx.Done():
 			return ctx.Err()
