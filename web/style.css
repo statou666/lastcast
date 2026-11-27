@@ -335,8 +335,14 @@ body[data-theme="light"] .player { background: rgba(255, 255, 255, .94); }
 .ptitlerow { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .ptitle { flex: 1; min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .ptitle:hover { color: var(--accent); }
-.pbar { grid-area: bar; height: 5px; background: var(--line); border-radius: 999px; overflow: hidden; cursor: pointer; }
+.pbar { grid-area: bar; height: 8px; background: var(--line); border-radius: 999px; cursor: pointer; position: relative; touch-action: none; }
 .pbar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; }
+/* long-press seek: the time under the finger, shown above the bar */
+.seektip { position: absolute; bottom: calc(100% + 6px); left: 0; transform: translateX(-50%);
+  background: var(--panel-2, #222); color: var(--ink); border: 1px solid var(--line);
+  padding: 2px 7px; border-radius: 8px; font-size: 12px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; pointer-events: none; z-index: 2; }
+#sleep.on { border-color: var(--accent); color: var(--accent); }
 .pctl { grid-area: ctl; display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; }
 .pctl button, .pctl select { min-height: 34px; padding: 4px 9px; font-size: 12.5px; border-radius: 10px; }
 .pctl select { width: auto; min-width: 0; }
@@ -350,7 +356,6 @@ body[data-theme="light"] .player { background: rgba(255, 255, 255, .94); }
 
 /* ---------- responsive: tablet ---------- */
 @media (max-width: 1180px) {
-  .pctl select#sleep { display: none; }
   #volume { width: 64px; }
 }
 @media (max-width: 1024px) {
@@ -415,6 +420,7 @@ body[data-theme="light"] .player { background: rgba(255, 255, 255, .94); }
       "cover main"
       "bar bar"
       "ctl ctl";
+    .pbar { height: 10px; }
     grid-template-rows: auto auto auto;
     padding: 9px 12px 10px;
     row-gap: 6px;
@@ -437,7 +443,6 @@ body[data-theme="light"] .player { background: rgba(255, 255, 255, .94); }
 @media (max-width: 420px) {
   .navlink { font-size: 10px; }
   .navlink .ico, .navlink .ico svg { width: 19px; height: 19px; }
-  .pctl #sleep { display: none; }
   .ptime { font-size: 11px; }
 }
 

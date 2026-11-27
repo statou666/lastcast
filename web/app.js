@@ -40,7 +40,9 @@ const DICT = {
     card_runtime: "Runtime settings", card_sync: "Sync", card_env: "Environment & stats",
     fetch_interval: "Fetch interval (min)", concurrency: "Download concurrency", conflict_rule: "Conflict rule",
     auto_download: "Auto-download new episodes", storage_limit: "Storage limit (MB, 0 = off)", ui_theme: "Theme",
-    device_name: "This device", sync_now: "Sync now", save: "Save", sleep_off: "Sleep off", sleep_end: "End of episode",
+    device_name: "This device", sync_now: "Sync now", save: "Save", sleep_off: "Sleep", sleep_end: "End of episode",
+    sleep: "Sleep", sleep_end_s: "EP", queue_expand: "Expand",
+    queue_collapse: "Collapse", gp_expand: "Expand", gp_collapse: "Collapse",
     env_precedence: "Env vars set defaults; a value saved here overrides that key. PORT/DATA_DIR are process-level.",
     status_new: "new", status_downloaded: "downloaded", status_error: "error", episodes_count: "episodes",
     view_grid: "Grid", view_list: "List", volume: "Volume",
@@ -93,7 +95,9 @@ const DICT = {
     card_runtime: "运行参数", card_sync: "同步", card_env: "环境变量与统计",
     fetch_interval: "抓取间隔（分钟）", concurrency: "下载并发", conflict_rule: "冲突规则",
     auto_download: "新集自动下载", storage_limit: "存储上限（MB，0 = 关闭）", ui_theme: "主题",
-    device_name: "本设备名称", sync_now: "立即同步", save: "保存", sleep_off: "不定时的", sleep_end: "本集播完即停",
+    device_name: "本设备名称", sync_now: "立即同步", save: "保存", sleep_off: "睡眠", sleep_end: "本集播完即停",
+    sleep: "睡眠", sleep_end_s: "集", queue_expand: "展开",
+    queue_collapse: "收起", gp_expand: "展开", gp_collapse: "收起",
     env_precedence: "环境变量提供默认值；在此页保存过的设置会覆盖该键的环境变量。PORT/DATA_DIR 属进程级配置，不受影响。",
     status_new: "新", status_downloaded: "已下载", status_error: "错误", episodes_count: "单集",
     view_grid: "海报", view_list: "列表", volume: "音量",
@@ -166,8 +170,14 @@ const barTime = document.getElementById("bar-time");
 const barRem = document.getElementById("bar-rem");
 const pcover = document.getElementById("pcover");
 const playBtn = document.getElementById("playpause");
+// Play/pause as icons (color follows the button, unchanged).
+const PLAY_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.2v13.6L19 12z"/></svg>';
+const PAUSE_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z"/></svg>';
+function setPlayIcon() { playBtn.innerHTML = audio.paused ? PLAY_SVG : PAUSE_SVG; playBtn.title = audio.paused ? t("play") : t("pause"); }
+setPlayIcon();
 let current = null;
 let queue = [];
+let queueCollapsed = false;
 let sleepAt = 0, sleepMode = "";
 let segIdx = 0, segTotal = 0;
 
@@ -182,12 +192,18 @@ function renderQueue() {
   if (!box) return;
   const panel = document.getElementById("queuebox");
   panel.hidden = !queue.length;
-  box.innerHTML = queue.map((ep, i) => `<div class="qrow">
+  const shown = queueCollapsed ? queue.slice(0, 1) : queue;
+  box.innerHTML = shown.map((ep, i) => `<div class="qrow">
     <span class="qnum">${i + 1}</span>
     <span class="qtitle">${esc(ep.title)}</span>
     <button data-act="qplay" data-id="${ep.id}">▶</button>
     <button data-act="qdel" data-id="${ep.queue_id}">✕</button>
   </div>`).join("");
+  const cb = document.getElementById("qcollapse");
+  if (cb) {
+    cb.textContent = queueCollapsed ? t("queue_expand") : t("queue_collapse");
+    cb.hidden = queue.length <= 1;
+  }
 }
 
 function applyLang() {
@@ -445,7 +461,7 @@ async function play() {
   if (segEp(current)) {
     prefetchSeg(current.id, (segIdx || 1) + 1);
   }
-  playBtn.textContent = t("pause");
+  setPlayIcon();
   recordPlay();
   if ("mediaSession" in navigator) {
     navigator.mediaSession.setActionHandler("play", play);
@@ -467,11 +483,25 @@ async function jump(dir) {
   play();
 }
 
-function sleepTimer() {
-  const v = document.getElementById("sleep").value;
-  if (!v || v === "0") { sleepMode = ""; sleepAt = 0; return; }
+// Compact sleep control: one button that cycles off → 15 → 30 → 45 → 60 → end-of-episode → off.
+// A select took too much room on the mobile player bar, so this replaces it.
+const SLEEP_STEPS = ["0", "900", "1800", "2700", "3600", "end"];
+let sleepIdx = 0;
+function sleepLabel(v) {
+  if (v === "0") return t("sleep");
+  if (v === "end") return t("sleep") + "·" + t("sleep_end_s");
+  return t("sleep") + " " + Math.round(Number(v) / 60);
+}
+function setSleep(v) {
+  sleepIdx = SLEEP_STEPS.indexOf(v);
+  if (sleepIdx < 0) sleepIdx = 0;
   sleepMode = v;
-  sleepAt = v === "end" ? 0 : Date.now() + Number(v) * 1000;
+  sleepAt = v === "0" || v === "end" ? 0 : Date.now() + Number(v) * 1000;
+  const b = document.getElementById("sleep");
+  if (b) { b.textContent = sleepLabel(v); b.classList.toggle("on", v !== "0"); }
+}
+function cycleSleep() {
+  setSleep(SLEEP_STEPS[(sleepIdx + 1) % SLEEP_STEPS.length]);
 }
 
 audio.addEventListener("loadedmetadata", () => {
@@ -518,7 +548,7 @@ audio.addEventListener("timeupdate", () => {
     current._rep = pos;
     reportProgress({ completed: audio.ended && (!segEp(current) || segIdx >= segTotal) ? 1 : 0 });
   }
-  if (sleepAt && Date.now() >= sleepAt && !audio.paused) { audio.pause(); playBtn.textContent = t("play"); sleepAt = 0; }
+  if (sleepAt && Date.now() >= sleepAt && !audio.paused) { audio.pause(); setPlayIcon(); sleepAt = 0; }
 });
 
 audio.addEventListener("pause", () => { if (!audio.ended) reportProgress({}); });
@@ -543,7 +573,7 @@ audio.addEventListener("ended", async () => {
       body: JSON.stringify({ segment: next }),
     }).catch(() => {});
     if (await waitSegment(next)) { segIdx = next; audio.src = new URL(source(current), location.origin).href; audio.currentTime = 0; audio.play().catch(() => {}); renderBar(); prefetchSeg(current.id, next + 1); return; }
-    playBtn.textContent = t("play");
+    setPlayIcon();
     return;
   }
   // The episode is fully finished: drop it from the playlist (it is no longer a
@@ -557,13 +587,13 @@ audio.addEventListener("ended", async () => {
     await loadQueue();
     if (queue.length) { const ep = queue[0]; setBar(ep); play(); return; }
   }
-  playBtn.textContent = t("play");
-  if (sleepMode === "end") document.getElementById("sleep").value = "off";
+  setPlayIcon();
+  if (sleepMode === "end") setSleep("0");
 });
 
 playBtn.addEventListener("click", () => {
   if (audio.paused) play(); else audio.pause();
-  playBtn.textContent = audio.paused ? t("play") : t("pause");
+  setPlayIcon();
 });
 document.getElementById("rewind").addEventListener("click", () => {
   if (segEp(current)) { jumpSeg(-1); return; }
@@ -574,7 +604,7 @@ document.getElementById("forward").addEventListener("click", () => {
   audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 30);
 });
 document.getElementById("speed").addEventListener("change", () => { audio.playbackRate = parseFloat(document.getElementById("speed").value) || 1; });
-document.getElementById("sleep").addEventListener("change", sleepTimer);
+document.getElementById("sleep").addEventListener("click", cycleSleep);
 document.getElementById("mute").addEventListener("click", () => { audio.muted = !audio.muted; document.getElementById("mute").classList.toggle("active", audio.muted); });
 const volEl = document.getElementById("volume");
 const volNum = document.getElementById("volnum");
@@ -591,13 +621,41 @@ if (volEl) {
   applyVolume(localStorage.getItem("volume") || 100);
   volEl.addEventListener("input", () => applyVolume(volEl.value));
 }
-document.getElementById("bar-progress").addEventListener("click", (e) => {
-  if (!audio.duration) return;
-  const r = e.currentTarget.getBoundingClientRect();
-  audio.currentTime = Math.max(0, Math.min(audio.duration, ((e.clientX - r.left) / r.width) * audio.duration));
+// Seek: tap the bar to jump, press-and-drag for fine control. While dragging, the
+// target time (or segment) shows above the finger and updates live.
+const bar = document.getElementById("bar-progress");
+const seektip = document.getElementById("seektip");
+function barSeek(e) {
+  const r = bar.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  const x = e.clientX - r.left;
+  if (segEp(current) && segTotal) {
+    const n = Math.max(1, Math.min(segTotal, Math.round(frac * segTotal)));
+    seektip.hidden = false;
+    seektip.style.left = x + "px";
+    seektip.textContent = t("segment") + " " + n + "/" + segTotal;
+    if (n !== segIdx) jumpSeg(n - segIdx);
+    renderBar();
+    return;
+  }
+  const dur = audio.duration || (current && current.duration_sec) || 0;
+  if (!dur) return;
+  const pos = frac * dur;
+  audio.currentTime = pos;
+  if (current) current.position = Math.floor(pos);
+  seektip.hidden = false;
+  seektip.style.left = x + "px";
+  seektip.textContent = fmtTime(Math.floor(pos));
   renderBar();
+}
+bar.addEventListener("pointerdown", (e) => {
+  bar.setPointerCapture(e.pointerId);
+  barSeek(e);
 });
-setInterval(() => { if (sleepAt && Date.now() >= sleepAt && !audio.paused) { audio.pause(); playBtn.textContent = t("play"); sleepAt = 0; } }, 5000);
+bar.addEventListener("pointermove", (e) => { if (e.buttons) barSeek(e); });
+bar.addEventListener("pointerup", () => { seektip.hidden = true; reportProgress({}); });
+bar.addEventListener("pointercancel", () => { seektip.hidden = true; });
+setInterval(() => { if (sleepAt && Date.now() >= sleepAt && !audio.paused) { audio.pause(); setPlayIcon(); sleepAt = 0; } }, 5000);
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input, select, textarea")) return;
   if (e.code === "Space") { e.preventDefault(); playBtn.click(); }
@@ -951,6 +1009,16 @@ async function renderGpodder() {
     </li>`).join("") || `<p class="mut">—</p>`;
 }
 
+// gPodder feed list: collapsed by default (the URLs are long), expand on demand.
+let gpCollapsed = true;
+document.getElementById("gp-toggle").addEventListener("click", () => {
+  gpCollapsed = !gpCollapsed;
+  const box = document.getElementById("gp-feeds");
+  if (box) box.hidden = gpCollapsed;
+  const b = document.getElementById("gp-toggle");
+  if (b) b.textContent = gpCollapsed ? t("gp_expand") : t("gp_collapse");
+});
+
 // Suggested voice ids; the real list is fetched from the provider's
 // /audio/voices endpoint (OpenAI-compatible servers vary a lot).
 const VOICE_DEFAULTS = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse",
@@ -1100,7 +1168,6 @@ async function renderEpisodeDetail(id) {
       <button data-act="q" data-id="${ep.id}">${t("queue")}</button>
       <button data-act="qnext" data-id="${ep.id}">${t("qnext")}</button>
       <button data-act="done" data-id="${ep.id}">${t("done")}</button>
-      ${ep.kind === "text" && ep.status !== "downloaded" ? `<button data-act="tts" data-id="${ep.id}">${t("tts_render")}</button>` : ""}
       ${(ep.link || /^https?:/i.test(ep.guid || "")) ? `<button data-act="fulltext" data-id="${ep.id}">${t("get_fulltext")}</button>` : ""}
     </div>
     <div class="article">${esc(strip(ep.body) || strip(ep.description) || "")}</div>
@@ -1161,6 +1228,7 @@ document.getElementById("cache-evict").addEventListener("click", async () => {
   await api("/api/cache", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "evict" }) });
   renderSettings();
 });
+document.getElementById("qcollapse").addEventListener("click", () => { queueCollapsed = !queueCollapsed; renderQueue(); });
 document.getElementById("qclear").addEventListener("click", async () => { await api("/api/queue/clear?device_id=" + encodeURIComponent(DEVICE), { method: "POST" }); await loadQueue(); });
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-act]");

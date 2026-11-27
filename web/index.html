@@ -11,7 +11,7 @@
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=24">
+<link rel="stylesheet" href="/style.css?v=25">
 </head>
 <body>
 <div class="shell">
@@ -76,7 +76,7 @@
         <button id="sel-updates" class="ghost" data-i18n="select" style="margin-left:auto"></button>
       </div>
       <section class="queue" id="queuebox" hidden>
-        <div class="qhead"><span data-i18n="queue_title"></span><button id="qclear" data-i18n="queue_clear"></button></div>
+        <div class="qhead"><span data-i18n="queue_title"></span><span class="qheadbtns"><button id="qcollapse" data-i18n="queue_collapse"></button><button id="qclear" data-i18n="queue_clear"></button></span></div>
         <ul id="queue"></ul>
       </section>
       <ul id="episodes" class="list"></ul>
@@ -172,8 +172,8 @@
         <h3 data-i18n="card_gpodder"></h3>
         <div class="mut" data-i18n="gpodder_hint" style="margin-bottom:12px"></div>
         <div class="kv"><label data-i18n="gpodder_server"></label><code id="gp-server">—</code></div>
-        <div class="mut" data-i18n="gpodder_feeds" style="margin:12px 0 6px"></div>
-        <ul id="gp-feeds" class="list"></ul>
+        <div class="gpfeedshead"><span class="mut" data-i18n="gpodder_feeds"></span><button id="gp-toggle" data-i18n="gp_expand"></button></div>
+        <ul id="gp-feeds" class="list" hidden></ul>
       </section>
 
       <section class="card">
@@ -284,19 +284,19 @@
       <div class="ptime"><span id="bar-time">00:00</span><span class="mut" id="bar-rem"></span></div>
     </div>
   </div>
-  <div class="pbar" id="bar-progress"><i id="bar-fill"></i></div>
+  <div class="pbar" id="bar-progress"><i id="bar-fill"></i><div class="seektip" id="seektip" hidden></div></div>
   <div class="pctl">
     <button id="rewind" title="-30s">−30</button>
-    <button id="playpause" data-i18n="play"></button>
+    <button id="playpause" title="play/pause"></button>
     <button id="forward" title="+30s">+30</button>
     <select id="speed" title="speed"><option>0.8</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select>
-    <select id="sleep" title="sleep"><option value="0" data-i18n="sleep_off"></option><option value="900">15</option><option value="1800">30</option><option value="2700">45</option><option value="3600">60</option><option value="end" data-i18n="sleep_end"></option></select>
+    <button id="sleep" data-i18n="sleep" title="sleep timer"></button>
     <button id="mute" data-i18n="mute"></button>
     <label class="vol" for="volume"><input id="volume" type="range" min="0" max="100" step="1" value="100"></label>
     <span class="volnum" id="volnum">100</span>
   </div>
   <audio id="audio"></audio>
 </footer>
-<script src="/app.js?v=24"></script>
+<script src="/app.js?v=25"></script>
 </body>
 </html>
